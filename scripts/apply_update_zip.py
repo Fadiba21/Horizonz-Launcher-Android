@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Apply source ZIPs in Update/ while preserving the project's README layout.
-
-An existing README is never copied wholesale. Only its marked version block and
-an explicitly English HORIZONZ_UPDATE_SUMMARY block may be synchronized. The
-version block is refreshed from packaging/android/build.gradle.
+"""
+Auto-Extract Update System (`scripts/apply_update_zip.py`):
+Scans the `Update/` directory for any `*.zip` archive(s).
+If found:
+1. Extracts all files from each `.zip` archive (automatically unwrapping a single top-level directory if present)
+   and overwrites the main repository source tree (`./`).
+2. Preserves the existing `README.md` if it contains `<!-- HORIZONZ_README_PRESERVE -->`, updating ONLY
+   the targeted version badges (`<!-- VERSION_BADGE_START -->` and `<!-- LATEST_VERSION_START -->`)
+   so the README layout and documentation are never overwritten on subsequent updates!
+3. Deletes the processed `.zip` file(s) from `Update/` while keeping `Update/.gitkeep` and `Update/README.md`.
 """
 
 import re
@@ -15,124 +20,38 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 UPDATE_DIR = ROOT_DIR / "Update"
-README_LANGUAGE_MARKER = "<!-- HORIZONZ_README_LANGUAGE: en -->"
-README_PRESERVE_MARKER = "<!-- HORIZONZ_README_PRESERVE -->"
-VERSION_START = "<!-- HORIZONZ_VERSION_START -->"
-VERSION_END = "<!-- HORIZONZ_VERSION_END -->"
-SUMMARY_START = "<!-- HORIZONZ_UPDATE_SUMMARY_START -->"
-SUMMARY_END = "<!-- HORIZONZ_UPDATE_SUMMARY_END -->"
-SUMMARY_LANGUAGE_MARKER = "<!-- HORIZONZ_UPDATE_SUMMARY_LANGUAGE: en -->"
 
 
-def extract_marked_block(text: str, start_marker: str, end_marker: str) -> str | None:
-    start = text.find(start_marker)
-    if start < 0:
-        return None
-    end = text.find(end_marker, start + len(start_marker))
-    if end < 0:
-        return None
-    return text[start : end + len(end_marker)]
+def sync_readme_version_only(existing_readme: Path, incoming_readme: Path):
+    """Updates only the version badge & latest version callout in existing_readme."""
+    try:
+        cur_txt = existing_readme.read_text(encoding="utf-8")
+        inc_txt = incoming_readme.read_text(encoding="utf-8")
+        if "<!-- HORIZONZ_README_PRESERVE -->" not in cur_txt:
+            shutil.copy2(incoming_readme, existing_readme)
+            return
 
+        for start_tag, end_tag in [
+            ("<!-- VERSION_BADGE_START -->", "<!-- VERSION_BADGE_END -->"),
+            ("<!-- LATEST_VERSION_START -->", "<!-- LATEST_VERSION_END -->"),
+        ]:
+            if start_tag in cur_txt and end_tag in cur_txt and start_tag in inc_txt and end_tag in inc_txt:
+                inc_block = inc_txt[inc_txt.index(start_tag):inc_txt.index(end_tag) + len(end_tag)]
+                cur_start = cur_txt.index(start_tag)
+                cur_end = cur_txt.index(end_tag) + len(end_tag)
+                cur_txt = cur_txt[:cur_start] + inc_block + cur_txt[cur_end:]
 
-def replace_marked_block(
-    text: str, replacement: str, start_marker: str, end_marker: str
-) -> tuple[str, bool]:
-    start = text.find(start_marker)
-    if start < 0:
-        return text, False
-    end = text.find(end_marker, start + len(start_marker))
-    if end < 0:
-        return text, False
-    end += len(end_marker)
-    return text[:start] + replacement + text[end:], True
+        # Also extract version number from incoming zip/readme if present (e.g. v1.21.0)
+        ver_match = re.search(r"HorizonZ_Launcher-v(\d+\.\d+(?:\.\d+)?)", inc_txt)
+        if ver_match:
+            new_ver = ver_match.group(1)
+            cur_txt = re.sub(r"HorizonZ_Launcher-v\d+\.\d+(?:\.\d+)?", f"HorizonZ_Launcher-v{new_ver}", cur_txt)
+            cur_txt = re.sub(r"HorizonZ v\d+\.\d+(?:\.\d+)?", f"HorizonZ v{new_ver}", cur_txt)
 
-
-def read_build_metadata(root_dir: Path) -> dict[str, str]:
-    gradle_file = root_dir / "packaging/android/build.gradle"
-    if not gradle_file.is_file():
-        return {}
-    text = gradle_file.read_text(encoding="utf-8", errors="replace")
-    patterns = {
-        "version_name": r"\bversionName\s+['\"]([^'\"]+)['\"]",
-        "version_code": r"\bversionCode\s+(\d+)",
-        "min_sdk": r"customMinSdk\s*=\s*Integer\.parseInt\(\(project\.findProperty\('minSdk'\)\s*\?:\s*'(\d+)'",
-        "compile_sdk": r"\bcompileSdk\s+(\d+)",
-        "target_sdk": r"\btargetSdk\s+(\d+)",
-    }
-    result = {}
-    for key, pattern in patterns.items():
-        match = re.search(pattern, text)
-        if match:
-            result[key] = match.group(1)
-    return result
-
-
-def version_block(metadata: dict[str, str]) -> str | None:
-    version = metadata.get("version_name")
-    if not version:
-        return None
-    code = metadata.get("version_code", "—")
-    min_sdk = metadata.get("min_sdk", "—")
-    compile_sdk = metadata.get("compile_sdk", "—")
-    target_sdk = metadata.get("target_sdk", "—")
-    badge_version = version.split("-", 1)[0]
-    return (
-        f"{VERSION_START}\n"
-        f"<p align=\"center\">\n"
-        f"  <a href=\"https://github.com/Fadiba21/Horizonz-Launcher/releases/latest\"><img src=\"https://img.shields.io/badge/Release-v{badge_version}-52b788?style=for-the-badge&logo=android&logoColor=white\" alt=\"Release v{badge_version}\"></a>\n"
-        f"  <strong>Current source:</strong> "
-        f"<code>{version}</code> · <strong>versionCode:</strong> "
-        f"<code>{code}</code> · <strong>Minimum Android:</strong> "
-        f"API {min_sdk} · <strong>Compile/target SDK:</strong> "
-        f"{compile_sdk}/{target_sdk}\n</p>\n"
-        f"{VERSION_END}"
-    )
-
-
-def update_preserved_readme(root_dir: Path, incoming_readme: str | None) -> None:
-    readme_path = root_dir / "README.md"
-    if not readme_path.is_file():
-        if incoming_readme is not None and README_LANGUAGE_MARKER in incoming_readme:
-            readme_path.write_text(incoming_readme, encoding="utf-8")
-            print("[Auto-Update] README.md added with its explicit English-language marker.")
-        elif incoming_readme is not None:
-            print("[Auto-Update] Incoming README skipped; it lacks the explicit English-language marker.")
-        return
-
-    current = readme_path.read_text(encoding="utf-8", errors="replace")
-    if README_PRESERVE_MARKER not in current:
-        print("[Auto-Update] Existing README retained; its preservation marker is absent.")
-        return
-
-    updated = current
-    metadata = read_build_metadata(root_dir)
-    block = version_block(metadata)
-    if block is not None:
-        updated, changed = replace_marked_block(updated, block, VERSION_START, VERSION_END)
-        if changed:
-            print(f"[Auto-Update] README version refreshed from Gradle: {metadata['version_name']}.")
-        else:
-            print("[Auto-Update] README preservation is active, but its version markers are missing or incomplete.")
-    else:
-        print("[Auto-Update] Could not read version metadata; README version block was left unchanged.")
-
-    if incoming_readme is not None:
-        summary = extract_marked_block(incoming_readme, SUMMARY_START, SUMMARY_END)
-        if summary is not None and SUMMARY_LANGUAGE_MARKER in summary:
-            updated, changed = replace_marked_block(updated, summary, SUMMARY_START, SUMMARY_END)
-            if changed:
-                print("[Auto-Update] English README update summary synchronized from the ZIP's marked block.")
-            else:
-                print("[Auto-Update] Incoming summary found, but current README summary markers are missing.")
-        elif summary is not None:
-            print("[Auto-Update] Incoming summary lacks the explicit English marker; existing summary was preserved.")
-        else:
-            print("[Auto-Update] Incoming README has no marked update summary; existing summary was preserved.")
-    else:
-        print("[Auto-Update] ZIP has no root README.md; existing summary was preserved.")
-
-    if updated != current:
-        readme_path.write_text(updated, encoding="utf-8")
+        existing_readme.write_text(cur_txt, encoding="utf-8")
+        print("[Auto-Update] Preserved README.md and updated only version badges.")
+    except Exception as e:
+        print(f"[Auto-Update] Notice while updating README.md version section: {e}")
 
 
 def extract_zip_to_root(zip_path: Path, root_dir: Path) -> int:
@@ -150,30 +69,21 @@ def extract_zip_to_root(zip_path: Path, root_dir: Path) -> int:
                 source_base = entries[0]
                 print(f"[Auto-Update] Detected wrapper folder '{source_base.name}/', unwrapping to root...")
 
-        current_readme_path = root_dir / "README.md"
-        preserve_readme = current_readme_path.is_file()
-        incoming_readme = None
-
         for item in sorted(source_base.rglob("*")):
-            if not item.is_file():
-                continue
-            rel_path = item.relative_to(source_base)
-            if rel_path.parts[0] == "Update" and rel_path.suffix.lower() == ".zip":
-                continue
-            if rel_path.as_posix() == "README.md" and preserve_readme:
-                incoming_readme = item.read_text(encoding="utf-8", errors="replace")
+            if item.is_file():
+                rel_path = item.relative_to(source_base)
+                if rel_path.parts[0] == "Update" and rel_path.suffix.lower() == ".zip":
+                    continue
+                dest_path = root_dir / rel_path
+                if rel_path.as_posix() == "README.md" and dest_path.exists():
+                    sync_readme_version_only(dest_path, item)
+                    extracted_count += 1
+                    continue
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dest_path)
+                if dest_path.suffix in (".py", ".sh"):
+                    dest_path.chmod(dest_path.stat().st_mode | 0o755)
                 extracted_count += 1
-                print("[Auto-Update] Kept current README layout; queued only marked version/changelog sync.")
-                continue
-            dest_path = root_dir / rel_path
-            dest_path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(item, dest_path)
-            if dest_path.suffix in (".py", ".sh"):
-                dest_path.chmod(dest_path.stat().st_mode | 0o755)
-            extracted_count += 1
-
-        if preserve_readme:
-            update_preserved_readme(root_dir, incoming_readme)
 
     return extracted_count
 
@@ -193,10 +103,10 @@ def main() -> int:
     applied_names = []
     for zpath in zip_files:
         if not zipfile.is_zipfile(zpath):
-            print(f"[Auto-Update] Skipping invalid ZIP file: {zpath.name}")
+            print(f"[Auto-Update] Skipping invalid zip file: {zpath.name}")
             continue
         count = extract_zip_to_root(zpath, ROOT_DIR)
-        print(f"[Auto-Update] Applied {count} source files from {zpath.name}.")
+        print(f"[Auto-Update] Overwrote {count} files from {zpath.name} into main source.")
         zpath.unlink()
         applied_names.append(zpath.name)
 

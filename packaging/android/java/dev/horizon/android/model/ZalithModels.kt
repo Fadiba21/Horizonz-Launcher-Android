@@ -231,6 +231,18 @@ data class ModPackageDetailInfo(
     val fileSizeFormatted: String
 )
 
+enum class HorizonBackgroundMode(val serdeKey: String, val label: String) {
+    WALLPAPER("wallpaper", "Static HD Minecraft Wallpaper (16:9)"),
+    YOUTUBE_TRAILER("youtube-trailer", "Auto-Play Minecraft YouTube Trailer (720p)")
+}
+
+data class MinecraftTrailerVideo(
+    val videoId: String,
+    val title: String,
+    val publishedDate: String,
+    val watchUrl: String = "https://www.youtube.com/watch?v=$videoId"
+)
+
 enum class ZalithThemePalette(val label: String, val primaryHex: Long, val secondaryHex: Long, val surfaceHex: Long) {
     MATERIAL_YOU("Material You (Dynamic)", 0xFF64B5F6, 0xFF81C784, 0xFF10131A),
     EMBERMIRE("Embermire Dark", 0xFFFF7043, 0xFFFFB74D, 0xFF12151E),
@@ -300,7 +312,10 @@ data class HorizonConfigState(
     val enableSystemLog: Boolean = true,
     val disableAudioSafeMode: Boolean = false,
     val discordRichPresence: Boolean = true,
-    val publicOnDeviceAssetDownload: Boolean = true
+    val publicOnDeviceAssetDownload: Boolean = true,
+    val backgroundMode: HorizonBackgroundMode = HorizonBackgroundMode.WALLPAPER,
+    val useYoutubeTrailerWallpaper: Boolean = false,
+    val muteTrailerVideo: Boolean = false
 )
 
 val MINECRAFT_SPLASH_QUOTES = listOf(

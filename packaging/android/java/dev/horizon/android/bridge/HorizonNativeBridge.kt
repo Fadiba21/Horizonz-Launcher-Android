@@ -186,7 +186,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "1.19"
+    const val INSTALLED_LAUNCHER_VERSION = "1.0"
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
     private val memoryLogs = ConcurrentLinkedDeque<String>()
@@ -199,6 +199,96 @@ object HorizonNativeBridge {
 
     val storeDownloadPaused = AtomicBoolean(false)
     val storeDownloadCancelled = AtomicBoolean(false)
+    private val configIoLock = Any()
+    private val modDetailCache = java.util.concurrent.ConcurrentHashMap<String, ModPackageDetailInfo>()
+    private val saveDetailCache = java.util.concurrent.ConcurrentHashMap<String, WorldSaveDetailInfo>()
+    private val packDetailCache = java.util.concurrent.ConcurrentHashMap<String, ResourcePackDetailInfo>()
+
+    val OFFICIAL_MINECRAFT_TRAILERS_FALLBACK = listOf(
+        MinecraftTrailerVideo(
+            videoId = "UiPcEW_d9Io",
+            title = "Minecraft LIVE Official Trailer – September 2026",
+            publishedDate = "2026-09-22"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "3ntfjZGgm04",
+            title = "Minecraft LIVE Official Trailer – March 2026",
+            publishedDate = "2026-03-10"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "jLuJbSjo7NA",
+            title = "The Copper Age | Official Minecraft Trailer",
+            publishedDate = "2025-09-30"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "1lWDHaqw-B4",
+            title = "Minecraft Live 2025: Announcement Trailer",
+            publishedDate = "2025-03-05"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "MmB9b5njVbA",
+            title = "Official Minecraft Trailer",
+            publishedDate = "Official"
+        )
+    )
+
+    @Volatile
+    private var cachedYoutubeTrailers: List<MinecraftTrailerVideo>? = null
+
+    /**
+     * Automatically checks the official Minecraft YouTube Channel RSS/Atom feed
+     * (`channel_id=UC1sELGmy5jp5fQUugmuYlXQ` / `user=TeamMojang`) for the newest videos
+     * containing the keyword `"Trailer"` in their title, and merges them with verified
+     * official Minecraft Trailers!
+     */
+    fun fetchLatestMinecraftYoutubeTrailers(): List<MinecraftTrailerVideo> {
+        cachedYoutubeTrailers?.let { if (it.isNotEmpty()) return it }
+        val discovered = mutableListOf<MinecraftTrailerVideo>()
+        val feedUrls = listOf(
+            "https://www.youtube.com/feeds/videos.xml?channel_id=UC1sELGmy5jp5fQUugmuYlXQ",
+            "https://www.youtube.com/feeds/videos.xml?user=TeamMojang"
+        )
+        for (feedUrl in feedUrls) {
+            try {
+                val conn = (URL(feedUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 6000
+                    readTimeout = 7000
+                    setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION")
+                }
+                if (conn.responseCode == 200) {
+                    val xml = conn.inputStream.bufferedReader().use { it.readText() }
+                    val entryRegex = Regex("<entry>(.*?)</entry>", setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+                    val idRegex = Regex("<yt:videoId>([^<]+)</yt:videoId>")
+                    val titleRegex = Regex("<title>([^<]+)</title>")
+                    val pubRegex = Regex("<published>([^<]+)</published>")
+                    for (m in entryRegex.findAll(xml)) {
+                        val block = m.groupValues[1]
+                        val vid = idRegex.find(block)?.groupValues?.get(1)?.trim().orEmpty()
+                        val rawTitle = titleRegex.find(block)?.groupValues?.get(1)?.trim()
+                            ?.replace("&amp;", "&")
+                            ?.replace("&quot;", """)
+                            ?.replace("&#39;", "'")
+                            .orEmpty()
+                        val pub = pubRegex.find(block)?.groupValues?.get(1)?.take(10).orEmpty()
+                        if (vid.isNotEmpty() && rawTitle.contains("trailer", ignoreCase = true)) {
+                            if (discovered.none { it.videoId == vid }) {
+                                discovered.add(MinecraftTrailerVideo(videoId = vid, title = rawTitle, publishedDate = pub))
+                            }
+                        }
+                    }
+                }
+            } catch (ignored: Exception) {
+            }
+            if (discovered.isNotEmpty()) break
+        }
+        for (fb in OFFICIAL_MINECRAFT_TRAILERS_FALLBACK) {
+            if (discovered.none { it.videoId == fb.videoId }) {
+                discovered.add(fb)
+            }
+        }
+        cachedYoutubeTrailers = discovered
+        return discovered
+    }
 
     init {
         try {
@@ -1025,7 +1115,12 @@ object HorizonNativeBridge {
                     useDynamicColor = obj.optBoolean("useDynamicColor", true),
                     enableSystemLog = obj.optBoolean("enableSystemLog", true),
                     disableAudioSafeMode = obj.optBoolean("disableAudioSafeMode", false),
-                    discordRichPresence = obj.optBoolean("discordRichPresence", true)
+                    discordRichPresence = obj.optBoolean("discordRichPresence", true),
+                    backgroundMode = HorizonBackgroundMode.entries.firstOrNull {
+                        it.serdeKey == obj.optString("backgroundMode", "wallpaper")
+                    } ?: if (obj.optBoolean("useYoutubeTrailerWallpaper", false)) HorizonBackgroundMode.YOUTUBE_TRAILER else HorizonBackgroundMode.WALLPAPER,
+                    useYoutubeTrailerWallpaper = obj.optBoolean("useYoutubeTrailerWallpaper", false),
+                    muteTrailerVideo = obj.optBoolean("muteTrailerVideo", false)
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read zalith-config.json: ${e.message}")
@@ -1122,9 +1217,18 @@ object HorizonNativeBridge {
             put("enableSystemLog", config.enableSystemLog)
             put("disableAudioSafeMode", config.disableAudioSafeMode)
             put("discordRichPresence", config.discordRichPresence)
+            put("backgroundMode", config.backgroundMode.serdeKey)
+            put("useYoutubeTrailerWallpaper", config.useYoutubeTrailerWallpaper)
+            put("muteTrailerVideo", config.muteTrailerVideo)
         }
-        File(home, "zalith-config.json").writeText(zalithObj.toString(2))
-        saveConfig(context, config, activeAccount)
+        synchronized(configIoLock) {
+            runCatching {
+                File(home, "zalith-config.json").writeText(zalithObj.toString(2))
+                syncNativeHorizonAccountAndCatalog(home, activeAccount, config)
+            }.onFailure { e ->
+                Log.w(TAG, "saveConfig error: ${e.message}")
+            }
+        }
     }
 
     private fun syncNativeHorizonAccountAndCatalog(
@@ -1988,6 +2092,8 @@ object HorizonNativeBridge {
      * Description, Author, API line, and Capabilities for Manager & Store synchronization!
      */
     fun inspectModPackage(modFile: File): ModPackageDetailInfo {
+        val cacheKey = "${modFile.absolutePath}:${modFile.lastModified()}:${modFile.length()}"
+        modDetailCache[cacheKey]?.let { return it }
         val cleanId = sanitizeModId(modFile.name)
         val catalogMatch = PLAYHORIZON_REVIEWED_CATALOG.firstOrNull {
             sanitizeModId(it.id) == cleanId || sanitizeModId(it.slug) == cleanId
@@ -2039,7 +2145,7 @@ object HorizonNativeBridge {
             hasWasmBinary = hasWasm,
             fileName = modFile.name,
             fileSizeFormatted = sizeKb
-        )
+        ).also { modDetailCache[cacheKey] = it }
     }
 
     /**
@@ -3360,13 +3466,20 @@ object HorizonNativeBridge {
     // ========================================================================
 
     fun inspectWorldSave(saveFile: File): WorldSaveDetailInfo {
+        val cacheKey = "${saveFile.absolutePath}:${saveFile.lastModified()}"
+        saveDetailCache[cacheKey]?.let { return it }
         val lastPlayed = SimpleDateFormat("MMM dd, yyyy, h:mm:ss a", Locale.US).format(Date(saveFile.lastModified()))
         val hash = kotlin.math.abs(saveFile.name.hashCode().toLong())
         val deterministicSeed = (3518443851819293050L xor (hash * 6364136223846793005L)).toString()
 
         var mode = "Survival Mode"
-        var difficulty = "Normal"
-        var playMinutes = ((saveFile.walkTopDown().filter { it.isFile }.sumOf { it.length() } / 24576L).coerceIn(5L, 720L)).toInt()
+        val difficulty = "Normal"
+        val topSize = if (saveFile.isDirectory) {
+            saveFile.listFiles()?.sumOf { it.length() } ?: 49152L
+        } else {
+            saveFile.length()
+        }
+        val playMinutes = ((topSize / 8192L).coerceIn(5L, 720L)).toInt()
         if (saveFile.name.contains("creative", ignoreCase = true)) {
             mode = "Creative Mode"
         }
@@ -3382,10 +3495,12 @@ object HorizonNativeBridge {
             playTimeFormatted = "$days Days $hours Hours $mins Minutes",
             worldSeed = deterministicSeed,
             lastPlayedFormatted = lastPlayed
-        )
+        ).also { saveDetailCache[cacheKey] = it }
     }
 
     fun inspectResourcePack(packFile: File): ResourcePackDetailInfo {
+        val cacheKey = "${packFile.absolutePath}:${packFile.lastModified()}:${packFile.length()}"
+        packDetailCache[cacheKey]?.let { return it }
         val sizeKb = String.format(Locale.US, "%.2f KB", packFile.length() / 1024.0)
         val packType = if (packFile.isDirectory) "Folder" else "ZIP Archive"
         var desc = packFile.nameWithoutExtension.replace("-", " ").replace("_", " ")
@@ -3446,7 +3561,7 @@ object HorizonNativeBridge {
             fileName = packFile.name,
             fileSizeFormatted = sizeKb,
             formatVersion = formatVer
-        )
+        ).also { packDetailCache[cacheKey] = it }
     }
 
     fun loadLocalContentIconBitmap(file: File): Bitmap? {
@@ -3538,9 +3653,15 @@ object HorizonNativeBridge {
     // GITHUB RELEASES UPDATE DETECTOR (Checked Once on Launcher Entry)
     // ========================================================================
 
+    const val GITHUB_FORK_REPO_SLUG = "Fadiba21/Horizonz-Launcher"
+    const val GITHUB_FORK_RELEASES_URL = "https://github.com/Fadiba21/Horizonz-Launcher/releases"
+
     fun parseVersionNumbers(text: String): List<Int>? {
-        val regex = Regex("""(?:HorizonZ[-_ ]*Launcher[-_ ]*|HorizonZ|v)(\d+)\.(\d+)(?:\.(\d+))?""", RegexOption.IGNORE_CASE)
-        val match = regex.find(text) ?: Regex("""(\d+)\.(\d+)(?:\.(\d+))?""").find(text) ?: return null
+        val horizonzExplicit = Regex("""(?:HorizonZ[-_ ]*Launcher[-_ ]*v?|HorizonZ[-_ ]*v?)(\d+)\.(\d+)(?:\.(\d+))?""", RegexOption.IGNORE_CASE).find(text)
+        val match = horizonzExplicit
+            ?: Regex("""\bv(\d+)\.(\d+)(?:\.(\d+))?\b""", RegexOption.IGNORE_CASE).find(text)
+            ?: Regex("""(\d+)\.(\d+)(?:\.(\d+))?""").find(text)
+            ?: return null
         val major = match.groupValues[1].toIntOrNull() ?: return null
         val minor = match.groupValues[2].toIntOrNull() ?: return null
         val patch = match.groupValues.getOrNull(3)?.toIntOrNull() ?: 0
@@ -3556,53 +3677,102 @@ object HorizonNativeBridge {
         return 0
     }
 
+    /**
+     * Checks the new official `horizon-rust/horizon` fork repository (`Fadiba21/Horizonz-Launcher`)
+     * once on launcher startup for newer HorizonZ Android APK releases:
+     * - Filters for HorizonZ Android releases (releases with `.apk` assets or `HorizonZ` tag/title)
+     *   so upstream desktop tags from `horizon-rust/horizon` are ignored.
+     * - Compares all available releases and always selects the highest semantic version (e.g., if
+     *   installed is 1.9 and 1.10 + 1.20 exist, it always picks 1.20).
+     * - Picks the `.apk` asset matching the phone's CPU ABI (`arm64-v8a` or `armeabi-v7a`).
+     */
     fun checkGithubLatestReleaseUpdate(): GithubReleaseUpdateInfo? {
         return try {
-            val installedTuple = parseVersionNumbers("v$INSTALLED_LAUNCHER_VERSION") ?: listOf(1, 19, 0)
-            val conn = (URL("https://api.github.com/repos/Fadiba21/Horizonz-Launcher/releases?per_page=15").openConnection() as HttpURLConnection).apply {
-                connectTimeout = 7000
-                readTimeout = 8000
-                setRequestProperty("Accept", "application/vnd.github+json")
-                setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION")
-            }
-            if (conn.responseCode != 200) return null
-            val arr = JSONArray(conn.inputStream.bufferedReader().use { it.readText() })
+            val installedTuple = parseVersionNumbers("HorizonZ v$INSTALLED_LAUNCHER_VERSION") ?: listOf(1, 0, 0)
+            val preferredAbi = Build.SUPPORTED_ABIS?.firstOrNull() ?: "arm64-v8a"
+            val endpoints = listOf(
+                "https://api.github.com/repos/$GITHUB_FORK_REPO_SLUG/releases?per_page=30",
+                "https://api.github.com/repos/$GITHUB_FORK_REPO_SLUG/releases/latest"
+            )
+
             var bestVersionTuple = installedTuple
             var bestInfo: GithubReleaseUpdateInfo? = null
 
-            for (i in 0 until arr.length()) {
-                val rel = arr.getJSONObject(i)
-                if (rel.optBoolean("draft", false)) continue
-                val name = rel.optString("name", "")
-                val tag = rel.optString("tag_name", "")
-                val htmlUrl = rel.optString("html_url", "https://github.com/Fadiba21/Horizonz-Launcher/releases")
-                val assets = rel.optJSONArray("assets") ?: JSONArray()
-
-                var apkUrl = htmlUrl
-                var assetNames = ""
-                for (aIdx in 0 until assets.length()) {
-                    val asset = assets.getJSONObject(aIdx)
-                    val aname = asset.optString("name", "")
-                    assetNames += " $aname"
-                    if (aname.endsWith(".apk") && (aname.contains("arm64") || apkUrl == htmlUrl)) {
-                        apkUrl = asset.optString("browser_download_url", htmlUrl)
+            for (endpoint in endpoints) {
+                try {
+                    val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 7000
+                        readTimeout = 8000
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                        setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION ($GITHUB_FORK_REPO_SLUG)")
                     }
-                }
-
-                val candidateTuple = parseVersionNumbers("$name $assetNames $tag") ?: continue
-                if (compareVersionLists(candidateTuple, bestVersionTuple) > 0) {
-                    bestVersionTuple = candidateTuple
-                    val verLabel = if (candidateTuple.getOrElse(2) { 0 } > 0) {
-                        "${candidateTuple[0]}.${candidateTuple[1]}.${candidateTuple[2]}"
+                    if (conn.responseCode != 200) continue
+                    val rawJson = conn.inputStream.bufferedReader().use { it.readText() }.trim()
+                    val arr = if (rawJson.startsWith("[")) {
+                        JSONArray(rawJson)
+                    } else if (rawJson.firstOrNull() == '\u007B') {
+                        JSONArray().apply { put(JSONObject(rawJson)) }
                     } else {
-                        "${candidateTuple[0]}.${candidateTuple[1]}"
+                        continue
                     }
-                    bestInfo = GithubReleaseUpdateInfo(
-                        latestVersion = verLabel,
-                        releaseTitle = name.ifBlank { "HorizonZ Launcher v$verLabel" },
-                        downloadUrl = apkUrl,
-                        htmlUrl = htmlUrl
-                    )
+
+                    for (i in 0 until arr.length()) {
+                        val rel = arr.optJSONObject(i) ?: continue
+                        if (rel.optBoolean("draft", false)) continue
+                        val name = rel.optString("name", "")
+                        val tag = rel.optString("tag_name", "")
+                        val body = rel.optString("body", "")
+                        val htmlUrl = rel.optString("html_url", GITHUB_FORK_RELEASES_URL)
+                        val assets = rel.optJSONArray("assets") ?: JSONArray()
+
+                        var apkUrl = ""
+                        var fallbackApkUrl = ""
+                        var assetNames = ""
+                        for (aIdx in 0 until assets.length()) {
+                            val asset = assets.optJSONObject(aIdx) ?: continue
+                            val aname = asset.optString("name", "")
+                            val bUrl = asset.optString("browser_download_url", "")
+                            assetNames += " $aname"
+                            if (aname.endsWith(".apk", ignoreCase = true) && bUrl.isNotBlank()) {
+                                if (fallbackApkUrl.isEmpty()) fallbackApkUrl = bUrl
+                                if (aname.contains(preferredAbi, ignoreCase = true)) {
+                                    apkUrl = bUrl
+                                } else if (apkUrl.isEmpty() && aname.contains("arm64", ignoreCase = true)) {
+                                    apkUrl = bUrl
+                                }
+                            }
+                        }
+
+                        val chosenDownloadUrl = apkUrl.ifEmpty { fallbackApkUrl.ifEmpty { htmlUrl } }
+                        val combinedMeta = "$name $assetNames $tag"
+                        val isHorizonZRelease = fallbackApkUrl.isNotEmpty() ||
+                            combinedMeta.contains("horizonz", ignoreCase = true) ||
+                            body.contains("HorizonZ", ignoreCase = true)
+                        if (!isHorizonZRelease) continue
+
+                        val candidateTuple = parseVersionNumbers(combinedMeta) ?: continue
+                        // Guard against accidentally parsing Minecraft version "26.3" as launcher version
+                        if (candidateTuple[0] == 26 && candidateTuple[1] == 3) continue
+                        // Ignore pre-reset v1.5..v1.20 legacy tags (tags starting with "v1." from before the "horizonz-v" 1.0 reset)
+                        if (tag.startsWith("v1.", ignoreCase = true) && !tag.startsWith("horizonz-v", ignoreCase = true)) continue
+
+                        if (compareVersionLists(candidateTuple, bestVersionTuple) > 0) {
+                            bestVersionTuple = candidateTuple
+                            val verLabel = if (candidateTuple.getOrElse(2) { 0 } > 0) {
+                                "${candidateTuple[0]}.${candidateTuple[1]}.${candidateTuple[2]}"
+                            } else {
+                                "${candidateTuple[0]}.${candidateTuple[1]}"
+                            }
+                            bestInfo = GithubReleaseUpdateInfo(
+                                latestVersion = verLabel,
+                                releaseTitle = name.ifBlank { "HorizonZ - Launcher v$verLabel (Official Fork Release)" },
+                                downloadUrl = chosenDownloadUrl,
+                                htmlUrl = htmlUrl
+                            )
+                        }
+                    }
+                    if (bestInfo != null) break
+                } catch (ignored: Exception) {
                 }
             }
             bestInfo
@@ -3742,32 +3912,41 @@ object HorizonNativeBridge {
         return list.joinToString("\n") { "[${it.timestamp}] [${it.sourceTag}/${it.severity.label}] ${it.message}" }
     }
 
-    fun launchNativeGame(
+    fun prepareNativeGameLaunch(
         context: Context,
         config: HorizonConfigState,
         activeAccount: ZalithAccount
     ) {
         val home = ensureHomeDirectories(context)
-        syncAndRepairModsStorage(context, config.profile)
-        saveConfig(context, config, activeAccount)
-
-        // Ensure active custom skin is synced right before launching the game!
-        val skinBmp = loadOrGenerateAccountSkinBitmap(context, activeAccount)
-        val activeSkinFile = File(home, "custom_skin_active.png")
-        FileOutputStream(activeSkinFile).use { fos ->
-            skinBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
-        }
-        syncActiveSkinToGameEngine(context, activeSkinFile, activeAccount.slimSkinModel, config.profile, config.enableSystemLog)
-
         File(home, "zalith-game-exited.flag").delete()
-        File(home, "zalith-game-boot.txt").writeText("10|Starting HorizonZ Native Engine...")
-        File(home, "zalith-launch-token.txt").writeText(System.currentTimeMillis().toString())
+        File(home, "zalith-game-boot.txt").writeText("12|Preparing Profile, Mods & Skin...")
+        runCatching { syncAndRepairModsStorage(context, config.profile) }
+        File(home, "zalith-game-boot.txt").writeText("22|Syncing Engine Config & options.txt...")
+        runCatching { saveConfig(context, config, activeAccount) }
 
+        runCatching {
+            val skinBmp = loadOrGenerateAccountSkinBitmap(context, activeAccount)
+            val activeSkinFile = File(home, "custom_skin_active.png")
+            FileOutputStream(activeSkinFile).use { fos ->
+                skinBmp.compress(Bitmap.CompressFormat.PNG, 100, fos)
+            }
+            syncActiveSkinToGameEngine(context, activeSkinFile, activeAccount.slimSkinModel, config.profile, config.enableSystemLog)
+        }
+
+        File(home, "zalith-game-boot.txt").writeText("32|Starting HorizonZ Native Engine...")
+        File(home, "zalith-launch-token.txt").writeText(System.currentTimeMillis().toString())
         appendSystemLog(
             "Launching Minecraft 26.3 (Player=${activeAccount.username}, Skin=${activeAccount.skinSourceLabel}, Renderer=${config.renderer.serdeKey}, Scale=${config.renderScalePercent}%)",
             config.enableSystemLog,
             context
         )
+    }
+
+    fun startHorizonGameActivity(
+        context: Context,
+        config: HorizonConfigState,
+        activeAccount: ZalithAccount
+    ) {
         val intent = Intent(context, HorizonActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             putExtra("HORIZON_ANDROID_PUBLIC", config.publicOnDeviceAssetDownload)
@@ -3778,5 +3957,14 @@ object HorizonNativeBridge {
             putExtra("HORIZON_WGPU_BACKEND", if (config.renderer == HorizonRendererMode.OPENGL) "gl" else "vulkan")
         }
         context.startActivity(intent)
+    }
+
+    fun launchNativeGame(
+        context: Context,
+        config: HorizonConfigState,
+        activeAccount: ZalithAccount
+    ) {
+        prepareNativeGameLaunch(context, config, activeAccount)
+        startHorizonGameActivity(context, config, activeAccount)
     }
 }

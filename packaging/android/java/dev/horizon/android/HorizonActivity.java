@@ -539,20 +539,24 @@ public final class HorizonActivity extends NativeActivity {
             long elapsed = now - createdTimeMs;
 
             if (!engineReady) {
-                if (elapsed > 600L && targetProgress < 0.42f) {
-                    targetProgress = 0.42f;
+                if (elapsed > 400L && targetProgress < 0.46f) {
+                    targetProgress = 0.46f;
                     stageLabel = "Creating Vulkan / WGPU Surface...";
-                } else if (elapsed > 1600L && targetProgress < 0.68f) {
-                    targetProgress = 0.68f;
+                } else if (elapsed > 1200L && targetProgress < 0.70f) {
+                    targetProgress = 0.70f;
                     stageLabel = "Loading Minecraft 26.3 Registries & Atlases...";
-                } else if (elapsed > 2800L && targetProgress < 0.85f) {
-                    targetProgress = 0.85f;
+                } else if (elapsed > 2200L && targetProgress < 0.88f) {
+                    targetProgress = 0.88f;
                     stageLabel = "Applying Custom Player Skin & Audio Engine...";
-                } else if (elapsed > 3800L && targetProgress < 0.94f) {
-                    targetProgress = Math.min(0.94f, targetProgress + 0.0015f);
+                } else if (elapsed > 3100L && targetProgress < 0.96f) {
+                    targetProgress = Math.min(0.96f, targetProgress + 0.004f);
                     stageLabel = "Preparing Panorama & Main Menu...";
                 }
-                displayedProgress += (targetProgress - displayedProgress) * 0.07f;
+                if (elapsed >= 4000L) {
+                    engineReady = true;
+                    engineReadyFirstSeenMs = now;
+                }
+                displayedProgress += (targetProgress - displayedProgress) * 0.09f;
             } else {
                 // Once `100|Main Menu Ready` is written by Rust, wait ~1.25s while smoothly advancing
                 // to 100% so the Vulkan swapchain has already presented the TitleScreen underneath!
@@ -561,9 +565,9 @@ public final class HorizonActivity extends NativeActivity {
                 displayedProgress += (1.0f - displayedProgress) * 0.10f;
                 stageLabel = "Minecraft 26.3 Ready";
 
-                if (sinceEngineReady >= 1250L && displayedProgress >= 0.985f && elapsed >= 2800L) {
+                if (sinceEngineReady >= 650L && displayedProgress >= 0.97f && elapsed >= 2200L) {
                     displayedProgress = 1.0f;
-                    float fadeProgress = (sinceEngineReady - 1250L) / 420.0f;
+                    float fadeProgress = (sinceEngineReady - 650L) / 320.0f;
                     overlayAlpha = Math.max(0.0f, 1.0f - fadeProgress);
                     if (overlayAlpha <= 0.01f) {
                         active = false;

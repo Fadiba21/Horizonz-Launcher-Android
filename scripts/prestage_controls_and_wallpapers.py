@@ -110,6 +110,25 @@ def fetch_real_hd_minecraft_wallpapers():
         check=False,
     )
 
+    # Official Minecraft YouTube Trailer 1280x720 (16:9 HD) thumbnails
+    trailer_ids = ["UiPcEW_d9Io", "3ntfjZGgm04", "jLuJbSjo7NA", "1lWDHaqw-B4", "MmB9b5njVbA", "kpiK4dAb-Tk"]
+    yt_thumbs_dir = Path("/tmp/mc_yt_thumbs")
+    yt_thumbs_dir.mkdir(parents=True, exist_ok=True)
+    for tid in trailer_ids:
+        for res_name in ("maxresdefault.jpg", "hq720.jpg"):
+            turl = f"https://i.ytimg.com/vi/{tid}/{res_name}"
+            try:
+                req = urllib.request.Request(turl, headers={"User-Agent": "HorizonZ-CI/1.0"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    tdata = resp.read()
+                if len(tdata) > 15000:
+                    tfile = yt_thumbs_dir / f"yt_{tid}.jpg"
+                    tfile.write_bytes(tdata)
+                    candidates.append(tfile)
+                    break
+            except Exception:
+                continue
+
     preferred_minegrub = [
         "26.3 - [Wilderness Bound].png",
         "26.2 - [Chaos Cubed].png",

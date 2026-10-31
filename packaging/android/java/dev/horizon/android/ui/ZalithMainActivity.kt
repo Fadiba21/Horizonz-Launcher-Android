@@ -7,9 +7,16 @@ import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.annotation.SuppressLint
 import android.os.Build
 import android.os.Bundle
+import android.view.ViewGroup
+import android.webkit.WebChromeClient
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -258,16 +265,22 @@ class ZalithMainActivity : ComponentActivity() {
             DisposableEffect(lifecycleOwner) {
                 val observer = LifecycleEventObserver { _, event ->
                     when (event) {
-                        Lifecycle.Event.ON_RESUME -> {
+                        Lifecycle.Event.ON_START, Lifecycle.Event.ON_RESUME -> {
                             isLauncherHibernated = false
                             isLaunchingSplash = false
                             isGameProcessSleeping = false
-                            config = HorizonNativeBridge.loadSavedConfig(context)
-                            accounts = HorizonNativeBridge.loadSavedAccounts(context)
+                            scope.launch(Dispatchers.IO) {
+                                val loadedCfg = HorizonNativeBridge.loadSavedConfig(context)
+                                val loadedAcc = HorizonNativeBridge.loadSavedAccounts(context)
+                                withContext(Dispatchers.Main) {
+                                    config = loadedCfg
+                                    accounts = loadedAcc
+                                }
+                            }
                         }
                         Lifecycle.Event.ON_STOP -> {
-                            // If we launched the game and HorizonActivity is now in the foreground,
-                            // put the launcher into deep 0%-overhead sleep & free bitmap caches!
+                            // Pause all launcher UI, video, and timers ONLY after HorizonActivity (:game)
+                            // has actually taken over the foreground!
                             if (isLauncherHibernated || isLaunchingSplash) {
                                 isGameProcessSleeping = true
                                 HorizonNativeBridge.trimMemoryCaches()
@@ -293,7 +306,7 @@ class ZalithMainActivity : ComponentActivity() {
                     color = LauncherRootBg
                 ) {
                     if (isGameProcessSleeping) {
-                        // Complete 0%-CPU / 0%-GPU Deep Sleep while the player is inside Minecraft 26.3!
+                        // Complete 0%-CPU / 0%-GPU / 0%-Audio sleep while the user is inside Minecraft 26.3!
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -306,21 +319,52 @@ class ZalithMainActivity : ComponentActivity() {
                             config = config,
                             accounts = accounts,
                             activeAccount = activeAccount,
-                            isHibernated = isLauncherHibernated || isLaunchingSplash,
+                            isHibernated = isGameProcessSleeping || isLaunchingSplash,
                             onConfigChange = { updated ->
                                 config = updated
-                                HorizonNativeBridge.saveConfig(context, updated, activeAccount)
+                                val accSnapshot = activeAccount
+                                scope.launch(Dispatchers.IO) {
+                                    HorizonNativeBridge.saveConfig(context, updated, accSnapshot)
+                                }
                             },
                             onAccountsChange = { updatedList ->
                                 accounts = updatedList
-                                HorizonNativeBridge.saveAccounts(context, updatedList, config)
+                                val cfgSnapshot = config
+                                scope.launch(Dispatchers.IO) {
+                                    HorizonNativeBridge.saveAccounts(context, updatedList, cfgSnapshot)
+                                }
+                            },
+                            onCheckForUpdatesManual = {
+                                scope.launch {
+                                    Toast.makeText(context, "Checking github.com/Fadiba21/Horizonz-Launcher/releases...", Toast.LENGTH_SHORT).show()
+                                    val found = withContext(Dispatchers.IO) {
+                                        HorizonNativeBridge.checkGithubLatestReleaseUpdate()
+                                    }
+                                    if (found != null) {
+                                        releaseUpdateInfo = found
+                                        showUpdateBanner = true
+                                    } else {
+                                        Toast.makeText(context, "HorizonZ v${HorizonNativeBridge.INSTALLED_LAUNCHER_VERSION} sudah versi terbaru!", Toast.LENGTH_SHORT).show()
+                                        try {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(HorizonNativeBridge.GITHUB_FORK_RELEASES_URL)))
+                                        } catch (ignored: Exception) {
+                                        }
+                                    }
+                                }
                             },
                             onEnterGameHibernation = {
-                                isLaunchingSplash = true
-                                scope.launch {
-                                    delay(320L)
-                                    isLauncherHibernated = true
-                                    HorizonNativeBridge.launchNativeGame(context, config, activeAccount)
+                                if (!isLaunchingSplash) {
+                                    isLaunchingSplash = true
+                                    val cfgSnapshot = config
+                                    val accSnapshot = activeAccount
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            HorizonNativeBridge.prepareNativeGameLaunch(context, cfgSnapshot, accSnapshot)
+                                        }
+                                        delay(180L)
+                                        isLauncherHibernated = true
+                                        HorizonNativeBridge.startHorizonGameActivity(context, cfgSnapshot, accSnapshot)
+                                    }
                                 }
                             }
                         )
@@ -398,11 +442,11 @@ fun Modifier.animatedPressScale(
  */
 @Composable
 fun HorizonZBlackSplashOverlay() {
-    var progress by remember { mutableFloatStateOf(0.14f) }
+    var progress by remember { mutableFloatStateOf(0.16f) }
     LaunchedEffect(Unit) {
-        while (progress < 0.30f) {
-            delay(30L)
-            progress = (progress + 0.015f).coerceAtMost(0.30f)
+        while (progress < 0.92f) {
+            delay(28L)
+            progress = (progress + 0.022f).coerceAtMost(0.92f)
         }
     }
 
@@ -1234,6 +1278,7 @@ fun ZalithCleanLauncherScreen(
     isHibernated: Boolean,
     onConfigChange: (HorizonConfigState) -> Unit,
     onAccountsChange: (List<ZalithAccount>) -> Unit,
+    onCheckForUpdatesManual: () -> Unit = {},
     onEnterGameHibernation: () -> Unit
 ) {
     val context = LocalContext.current
@@ -1379,6 +1424,8 @@ fun ZalithCleanLauncherScreen(
                         Box(modifier = Modifier.fillMaxSize()) {
                             when (tab) {
                                 ZalithNavTab.HOME -> CleanHomeViewport(
+                                    config = config,
+                                    onConfigChange = onConfigChange,
                                     logEnabled = config.enableSystemLog,
                                     isHibernated = isHibernated
                                 )
@@ -1438,6 +1485,7 @@ fun ZalithCleanLauncherScreen(
                                 ZalithNavTab.SETTINGS -> CleanSettingsViewport(
                                     config = config,
                                     onConfigChange = onConfigChange,
+                                    onCheckForUpdatesManual = onCheckForUpdatesManual,
                                     onOpenLogs = { selectedTab = ZalithNavTab.LOGS }
                                 )
                             }
@@ -1687,16 +1735,225 @@ private fun ZalithIconRail(
  * - 18 Authentic HD 16:9 Minecraft Wallpapers cycling every 5 seconds with smooth crossfade.
  * - Zero duplicate navigation buttons on top-right (only a single clean `Wallpaper` button).
  */
+@SuppressLint("SetJavaScriptEnabled")
+@Composable
+private fun MinecraftTrailerVideoWallpaperPlayer(
+    videoId: String,
+    isMuted: Boolean,
+    isPaused: Boolean,
+    onVideoEndedOrError: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val htmlContent = remember(videoId) {
+        """
+        <!DOCTYPE html>
+        <html>
+        <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+        <style>
+          html, body {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000000; overflow: hidden;
+          }
+          #player-wrap {
+            position: absolute; top: -6%; left: -6%; width: 112%; height: 112%;
+            pointer-events: none;
+          }
+          iframe {
+            width: 100%; height: 100%; border: 0;
+          }
+        </style>
+        </head>
+        <body>
+          <div id="player-wrap"><div id="player"></div></div>
+          <script src="https://www.youtube.com/iframe_api"></script>
+          <script>
+            var player;
+            var initialMuted = ${if (isMuted) "true" else "false"};
+            function onYouTubeIframeAPIReady() {
+              player = new YT.Player('player', {
+                width: '100%',
+                height: '100%',
+                videoId: '$videoId',
+                playerVars: {
+                  'autoplay': 1,
+                  'controls': 0,
+                  'rel': 0,
+                  'showinfo': 0,
+                  'modestbranding': 1,
+                  'iv_load_policy': 3,
+                  'fs': 0,
+                  'playsinline': 1,
+                  'vq': 'hd720'
+                },
+                events: {
+                  'onReady': function(event) {
+                    event.target.setPlaybackQuality('hd720');
+                    if (initialMuted) {
+                      event.target.mute();
+                    } else {
+                      event.target.unMute();
+                      event.target.setVolume(100);
+                    }
+                    event.target.playVideo();
+                  },
+                  'onStateChange': function(event) {
+                    if (event.data === YT.PlayerState.PLAYING) {
+                      event.target.setPlaybackQuality('hd720');
+                    } else if (event.data === YT.PlayerState.ENDED) {
+                      window.location.href = 'horizonz://trailer-ended';
+                    }
+                  },
+                  'onError': function(event) {
+                    window.location.href = 'horizonz://trailer-error';
+                  }
+                }
+              });
+            }
+            function setHorizonMuted(muteFlag) {
+              initialMuted = muteFlag;
+              if (player && player.mute && player.unMute) {
+                if (muteFlag) {
+                  player.mute();
+                } else {
+                  player.unMute();
+                  if (player.setVolume) player.setVolume(100);
+                }
+              }
+            }
+            function setHorizonPaused(pauseFlag) {
+              if (player && player.pauseVideo && player.playVideo) {
+                if (pauseFlag) {
+                  player.pauseVideo();
+                } else {
+                  player.playVideo();
+                }
+              }
+            }
+          </script>
+        </body>
+        </html>
+        """.trimIndent()
+    }
+
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            webViewRef?.let { wv ->
+                runCatching {
+                    wv.evaluateJavascript("if(window.setHorizonPaused) setHorizonPaused(true);", null)
+                    wv.onPause()
+                    wv.pauseTimers()
+                    wv.stopLoading()
+                    wv.destroy()
+                }
+            }
+            webViewRef = null
+        }
+    }
+
+    LaunchedEffect(isMuted, webViewRef) {
+        webViewRef?.evaluateJavascript(
+            "if(window.setHorizonMuted) setHorizonMuted(${if (isMuted) "true" else "false"});",
+            null
+        )
+    }
+
+    LaunchedEffect(isPaused, webViewRef) {
+        webViewRef?.let { wv ->
+            if (isPaused) {
+                wv.evaluateJavascript("if(window.setHorizonPaused) setHorizonPaused(true);", null)
+                wv.onPause()
+            } else {
+                wv.onResume()
+                wv.resumeTimers()
+                wv.evaluateJavascript("if(window.setHorizonPaused) setHorizonPaused(false);", null)
+            }
+        }
+    }
+
+    AndroidView(
+        modifier = modifier,
+        factory = { ctx ->
+            WebView(ctx).apply {
+                layoutParams = ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                setBackgroundColor(android.graphics.Color.BLACK)
+                isClickable = false
+                isFocusable = false
+                settings.apply {
+                    javaScriptEnabled = true
+                    mediaPlaybackRequiresUserGesture = false
+                    domStorageEnabled = true
+                    loadsImagesAutomatically = true
+                    cacheMode = WebSettings.LOAD_DEFAULT
+                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                    userAgentString = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                }
+                webChromeClient = WebChromeClient()
+                webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                        if (url != null && (url.startsWith("horizonz://trailer-ended") || url.startsWith("horizonz://trailer-error"))) {
+                            onVideoEndedOrError()
+                            return true
+                        }
+                        return false
+                    }
+                }
+                tag = videoId
+                loadDataWithBaseURL("https://www.youtube.com", htmlContent, "text/html", "utf-8", null)
+                webViewRef = this
+            }
+        },
+        update = { wv ->
+            if (wv.tag != videoId) {
+                wv.tag = videoId
+                wv.loadDataWithBaseURL("https://www.youtube.com", htmlContent, "text/html", "utf-8", null)
+            }
+        }
+    )
+}
+
 @Composable
 private fun CleanHomeViewport(
+    config: HorizonConfigState,
+    onConfigChange: (HorizonConfigState) -> Unit,
     logEnabled: Boolean,
     isHibernated: Boolean
 ) {
     val context = LocalContext.current
-    var customWallpapers by remember { mutableStateOf(HorizonNativeBridge.getCustomWallpapers(context)) }
+    var customWallpapers by remember { mutableStateOf<List<File>>(emptyList()) }
+    LaunchedEffect(Unit) {
+        customWallpapers = withContext(Dispatchers.IO) {
+            HorizonNativeBridge.getCustomWallpapers(context)
+        }
+    }
     val totalCount = DASHBOARD_WALLPAPERS.size + customWallpapers.size
     var quoteIndex by remember { mutableIntStateOf((MINECRAFT_SPLASH_QUOTES.indices).random()) }
-    var wallpaperIndex by remember { mutableIntStateOf((0 until totalCount).random()) }
+    var wallpaperIndex by remember { mutableIntStateOf((0 until totalCount.coerceAtLeast(1)).random()) }
+
+    val isVideoMode = config.useYoutubeTrailerWallpaper || config.backgroundMode == HorizonBackgroundMode.YOUTUBE_TRAILER
+    var trailerList by remember { mutableStateOf(HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK) }
+    var currentTrailerIndex by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(isVideoMode) {
+        if (isVideoMode) {
+            val fetched = withContext(Dispatchers.IO) {
+                HorizonNativeBridge.fetchLatestMinecraftYoutubeTrailers()
+            }
+            if (fetched.isNotEmpty()) {
+                trailerList = fetched
+                currentTrailerIndex = 0
+            }
+        }
+    }
+
+    val activeTrailer = trailerList.getOrElse(currentTrailerIndex % trailerList.size.coerceAtLeast(1)) {
+        HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK.first()
+    }
 
     val wallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -1709,11 +1966,15 @@ private fun CleanHomeViewport(
             )
             customWallpapers = HorizonNativeBridge.getCustomWallpapers(context)
             wallpaperIndex = DASHBOARD_WALLPAPERS.size
+            if (isVideoMode) {
+                onConfigChange(config.copy(backgroundMode = HorizonBackgroundMode.WALLPAPER, useYoutubeTrailerWallpaper = false))
+            }
         }
     }
 
-    LaunchedEffect(totalCount, isHibernated) {
-        while (!isHibernated) {
+    // Only rotate static wallpapers when Video Mode is OFF and Launcher is NOT hibernated!
+    LaunchedEffect(totalCount, isHibernated, isVideoMode) {
+        while (!isHibernated && !isVideoMode) {
             delay(5000L)
             wallpaperIndex = (wallpaperIndex + 1) % totalCount.coerceAtLeast(1)
         }
@@ -1736,42 +1997,55 @@ private fun CleanHomeViewport(
         modifier = Modifier.fillMaxSize()
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            AnimatedContent(
-                targetState = wallpaperIndex % totalCount.coerceAtLeast(1),
-                transitionSpec = {
-                    fadeIn(animationSpec = tween(900)).togetherWith(fadeOut(animationSpec = tween(900))).using(sizeTransform = null)
-                },
-                modifier = Modifier.fillMaxSize(),
-                label = "MinecraftWallpaperCarousel"
-            ) { idx ->
-                if (idx >= DASHBOARD_WALLPAPERS.size && (idx - DASHBOARD_WALLPAPERS.size) < customWallpapers.size) {
-                    val customFile = customWallpapers[idx - DASHBOARD_WALLPAPERS.size]
-                    val bmp = remember(customFile.absolutePath) {
-                        runCatching { BitmapFactory.decodeFile(customFile.absolutePath)?.asImageBitmap() }.getOrNull()
-                    }
-                    if (bmp != null) {
-                        Image(
-                            bitmap = bmp,
-                            contentDescription = "Custom Minecraft Wallpaper",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
+            if (isVideoMode && !isHibernated) {
+                // Static wallpaper is turned OFF while official Minecraft YouTube Trailer (720p) is playing!
+                MinecraftTrailerVideoWallpaperPlayer(
+                    videoId = activeTrailer.videoId,
+                    isMuted = config.muteTrailerVideo,
+                    isPaused = isHibernated,
+                    onVideoEndedOrError = {
+                        currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else if (!isHibernated) {
+                AnimatedContent(
+                    targetState = wallpaperIndex % totalCount.coerceAtLeast(1),
+                    transitionSpec = {
+                        fadeIn(animationSpec = tween(900)).togetherWith(fadeOut(animationSpec = tween(900))).using(sizeTransform = null)
+                    },
+                    modifier = Modifier.fillMaxSize(),
+                    label = "MinecraftWallpaperCarousel"
+                ) { idx ->
+                    if (idx >= DASHBOARD_WALLPAPERS.size && (idx - DASHBOARD_WALLPAPERS.size) < customWallpapers.size) {
+                        val customFile = customWallpapers[idx - DASHBOARD_WALLPAPERS.size]
+                        val bmp = remember(customFile.absolutePath) {
+                            runCatching { BitmapFactory.decodeFile(customFile.absolutePath)?.asImageBitmap() }.getOrNull()
+                        }
+                        if (bmp != null) {
+                            Image(
+                                bitmap = bmp,
+                                contentDescription = "Custom Minecraft Wallpaper",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Image(
+                                painter = painterResource(id = DASHBOARD_WALLPAPERS[0]),
+                                contentDescription = "Minecraft Wallpaper",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
                     } else {
+                        val resId = DASHBOARD_WALLPAPERS[idx % DASHBOARD_WALLPAPERS.size]
                         Image(
-                            painter = painterResource(id = DASHBOARD_WALLPAPERS[0]),
+                            painter = painterResource(id = resId),
                             contentDescription = "Minecraft Wallpaper",
                             contentScale = ContentScale.Crop,
                             modifier = Modifier.fillMaxSize()
                         )
                     }
-                } else {
-                    val resId = DASHBOARD_WALLPAPERS[idx % DASHBOARD_WALLPAPERS.size]
-                    Image(
-                        painter = painterResource(id = resId),
-                        contentDescription = "Minecraft Wallpaper",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
                 }
             }
 
@@ -1781,33 +2055,95 @@ private fun CleanHomeViewport(
                     .background(
                         Brush.verticalGradient(
                             colors = listOf(
-                                Color.Black.copy(alpha = 0.08f),
-                                Color.Black.copy(alpha = 0.68f)
+                                Color.Black.copy(alpha = if (isVideoMode) 0.04f else 0.08f),
+                                Color.Black.copy(alpha = if (isVideoMode) 0.58f else 0.68f)
                             )
                         )
                     )
             )
 
-            // Single non-duplicated Wallpaper button in top-right corner
-            Box(
+            // Top-Right Controls: Switch between Wallpaper & 720p YouTube Trailer + Mute/Silent Toggle + Next Trailer / Import Wallpaper
+            Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(14.dp)
+                    .padding(14.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                if (isVideoMode) {
+                    DashboardQuickIconPill(
+                        icon = if (config.muteTrailerVideo) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                        label = if (config.muteTrailerVideo) "Silent" else "720p Audio",
+                        onClick = {
+                            onConfigChange(config.copy(muteTrailerVideo = !config.muteTrailerVideo))
+                        }
+                    )
+                    DashboardQuickIconPill(
+                        icon = Icons.Default.SkipNext,
+                        label = "Next Trailer",
+                        onClick = {
+                            currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                        }
+                    )
+                } else {
+                    DashboardQuickIconPill(
+                        icon = Icons.Default.Wallpaper,
+                        label = "Wallpaper",
+                        onClick = { wallpaperPicker.launch("image/*") }
+                    )
+                }
+
                 DashboardQuickIconPill(
-                    icon = Icons.Default.Wallpaper,
-                    label = "Wallpaper",
-                    onClick = { wallpaperPicker.launch("image/*") }
+                    icon = if (isVideoMode) Icons.Default.Image else Icons.Default.PlayCircleFilled,
+                    label = if (isVideoMode) "Use Wallpaper" else "Play Trailer (720p)",
+                    onClick = {
+                        val nextVideo = !isVideoMode
+                        onConfigChange(
+                            config.copy(
+                                backgroundMode = if (nextVideo) HorizonBackgroundMode.YOUTUBE_TRAILER else HorizonBackgroundMode.WALLPAPER,
+                                useYoutubeTrailerWallpaper = nextVideo
+                            )
+                        )
+                    }
                 )
             }
 
-            // Bottom-Left Minecraft Grass Icon + Title + Animated Splash Quote
+            // Bottom-Left Minecraft Grass Icon + Title + Active Trailer Badge + Animated Splash Quote
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(22.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
+                if (isVideoMode) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color(0xFF141C22).copy(alpha = 0.82f),
+                        modifier = Modifier.border(1.dp, SkyBlueAccent.copy(alpha = 0.45f), RoundedCornerShape(50))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SmartDisplay,
+                                contentDescription = null,
+                                tint = Color(0xFFFF5252),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = "Minecraft Official Trailer (720p): ${activeTrailer.title}",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = Color.White,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                }
+
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -1841,7 +2177,9 @@ private fun CleanHomeViewport(
                         .fillMaxWidth(0.92f)
                         .animatedPressScale {
                             quoteIndex = (quoteIndex + 1) % MINECRAFT_SPLASH_QUOTES.size
-                            wallpaperIndex = (wallpaperIndex + 1) % totalCount.coerceAtLeast(1)
+                            if (!isVideoMode) {
+                                wallpaperIndex = (wallpaperIndex + 1) % totalCount.coerceAtLeast(1)
+                            }
                         },
                     label = "MinecraftSplashQuote"
                 ) { quote ->
@@ -4651,15 +4989,6 @@ private fun CleanFilesViewport(
     var showSortDropdown by remember { mutableStateOf(false) }
     var refreshCount by remember { mutableIntStateOf(0) }
 
-    // Automatically deduplicate & repair `.hmod` files whenever Files & Mods Manager opens or refreshes!
-    LaunchedEffect(currentFolder, refreshCount, profileSlot) {
-        if (currentFolder == "mods") {
-            withContext(Dispatchers.IO) {
-                HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
-            }
-        }
-    }
-
     // For Rename Dialog
     var renameTargetFile by remember { mutableStateOf<File?>(null) }
     var renameInputText by remember { mutableStateOf("") }
@@ -4675,38 +5004,52 @@ private fun CleanFilesViewport(
         Triple("screenshots", "Screenshots", Icons.Default.Image)
     )
 
-    val rawList = remember(currentFolder, refreshCount, profileSlot) {
-        if (currentFolder == "mods") {
-            HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
-            val hmodDir = File(home, "horizon-mods").apply { mkdirs() }
-            hmodDir.listFiles()
-                ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".tmp") && it.name.endsWith(".hmod", true) }
-                ?.distinctBy { HorizonNativeBridge.sanitizeModId(it.name) }
-                .orEmpty()
-        } else {
-            val dirFile = File(home, currentFolder).apply { mkdirs() }
-            dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty()
+    var rawList by remember { mutableStateOf<List<File>>(emptyList()) }
+    var filteredList by remember { mutableStateOf<List<File>>(emptyList()) }
+
+    // Perform all directory scanning, `.hmod` repair, and metadata pre-warming on Dispatchers.IO (zero UI lag!)
+    LaunchedEffect(currentFolder, refreshCount, profileSlot) {
+        val loaded = withContext(Dispatchers.IO) {
+            if (currentFolder == "mods") {
+                HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
+                val hmodDir = File(home, "horizon-mods").apply { mkdirs() }
+                hmodDir.listFiles()
+                    ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".tmp") && it.name.endsWith(".hmod", true) }
+                    ?.distinctBy { HorizonNativeBridge.sanitizeModId(it.name) }
+                    .orEmpty()
+                    .also { list -> list.forEach { HorizonNativeBridge.inspectModPackage(it) } }
+            } else {
+                val dirFile = File(home, currentFolder).apply { mkdirs() }
+                dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty().also { list ->
+                    if (currentFolder == "saves") list.forEach { HorizonNativeBridge.inspectWorldSave(it) }
+                    else if (currentFolder in listOf("resourcepacks", "shaderpacks")) list.forEach { HorizonNativeBridge.inspectResourcePack(it) }
+                }
+            }
         }
+        rawList = loaded
     }
 
-    val filteredList = remember(rawList, searchQuery, filterEnabledOnly, currentFolder, sortMode, refreshCount) {
-        val base = rawList.filter { file ->
-            val modInfo = if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(file) else null
-            val matchesQuery = searchQuery.isBlank() ||
-                file.name.contains(searchQuery, ignoreCase = true) ||
-                (modInfo != null && (modInfo.displayName.contains(searchQuery, ignoreCase = true) || modInfo.description.contains(searchQuery, ignoreCase = true)))
-            val matchesEnabled = if (!filterEnabledOnly || currentFolder in listOf("saves", "screenshots")) true
-            else HorizonNativeBridge.isContentItemEnabled(context, currentFolder, file.name, profileSlot)
-            matchesQuery && matchesEnabled
-        }
-        when (sortMode) {
-            FilesSortMode.BY_NAME -> base.sortedBy {
-                if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(it).displayName.lowercase(Locale.US)
-                else it.nameWithoutExtension.lowercase(Locale.US)
+    LaunchedEffect(rawList, searchQuery, filterEnabledOnly, currentFolder, sortMode, refreshCount) {
+        val computed = withContext(Dispatchers.IO) {
+            val base = rawList.filter { file ->
+                val modInfo = if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(file) else null
+                val matchesQuery = searchQuery.isBlank() ||
+                    file.name.contains(searchQuery, ignoreCase = true) ||
+                    (modInfo != null && (modInfo.displayName.contains(searchQuery, ignoreCase = true) || modInfo.description.contains(searchQuery, ignoreCase = true)))
+                val matchesEnabled = if (!filterEnabledOnly || currentFolder in listOf("saves", "screenshots")) true
+                else HorizonNativeBridge.isContentItemEnabled(context, currentFolder, file.name, profileSlot)
+                matchesQuery && matchesEnabled
             }
-            FilesSortMode.BY_FILE_NAME -> base.sortedBy { it.name.lowercase(Locale.US) }
-            FilesSortMode.BY_LAST_MODIFIED -> base.sortedByDescending { it.lastModified() }
+            when (sortMode) {
+                FilesSortMode.BY_NAME -> base.sortedBy {
+                    if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(it).displayName.lowercase(Locale.US)
+                    else it.nameWithoutExtension.lowercase(Locale.US)
+                }
+                FilesSortMode.BY_FILE_NAME -> base.sortedBy { it.name.lowercase(Locale.US) }
+                FilesSortMode.BY_LAST_MODIFIED -> base.sortedByDescending { it.lastModified() }
+            }
         }
+        filteredList = computed
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -5017,7 +5360,6 @@ private fun CleanFilesViewport(
                         modifier = Modifier
                             .size(20.dp)
                             .animatedPressScale {
-                                HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
                                 refreshCount += 1
                                 Toast.makeText(context, "Folder ${currentFolder} disinkronkan & diverifikasi!", Toast.LENGTH_SHORT).show()
                             }
@@ -5026,7 +5368,7 @@ private fun CleanFilesViewport(
 
                 // Smooth Animated List Content across folders and filter states
                 AnimatedContent(
-                    targetState = Pair(currentFolder, filteredList.size),
+                    targetState = currentFolder,
                     transitionSpec = {
                         (fadeIn(tween(240, easing = FastOutSlowInEasing)) +
                             slideInVertically(tween(240, easing = FastOutSlowInEasing)) { h -> h / 12 } +
@@ -5039,7 +5381,7 @@ private fun CleanFilesViewport(
                     },
                     modifier = Modifier.fillMaxSize(),
                     label = "FilesFolderAnimatedTransition"
-                ) { (folder, _) ->
+                ) { folder ->
                     val folderLabel = categories.firstOrNull { it.first == folder }?.second ?: folder
                     if (filteredList.isEmpty()) {
                         val emptyLabel = when (folder) {
@@ -5563,6 +5905,7 @@ private fun FileManagerRowCard(
 private fun CleanSettingsViewport(
     config: HorizonConfigState,
     onConfigChange: (HorizonConfigState) -> Unit,
+    onCheckForUpdatesManual: () -> Unit = {},
     onOpenLogs: () -> Unit
 ) {
     val context = LocalContext.current
@@ -5885,6 +6228,76 @@ private fun CleanSettingsViewport(
                     }
 
                     SettingsSubCategory.LAUNCHER -> {
+                        ZalithSettingDropdownCard(
+                            title = "Dashboard Background Mode (Wallpaper vs. Video Trailer)",
+                            description = "Choose between static 16:9 HD Minecraft wallpapers or auto-playing official Minecraft YouTube Trailers (720p)",
+                            selectedItem = config.backgroundMode,
+                            options = HorizonBackgroundMode.entries,
+                            itemLabel = { it.label },
+                            onSelect = { mode ->
+                                onConfigChange(
+                                    config.copy(
+                                        backgroundMode = mode,
+                                        useYoutubeTrailerWallpaper = (mode == HorizonBackgroundMode.YOUTUBE_TRAILER)
+                                    )
+                                )
+                            }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "Auto-Play Minecraft YouTube 'Trailer' Video (720p)",
+                            description = "Automatically play the latest official @Minecraft YouTube videos containing 'Trailer' on the dashboard and turn off static wallpaper while playing",
+                            checked = config.useYoutubeTrailerWallpaper || config.backgroundMode == HorizonBackgroundMode.YOUTUBE_TRAILER,
+                            onCheckedChange = { enabled ->
+                                onConfigChange(
+                                    config.copy(
+                                        useYoutubeTrailerWallpaper = enabled,
+                                        backgroundMode = if (enabled) HorizonBackgroundMode.YOUTUBE_TRAILER else HorizonBackgroundMode.WALLPAPER
+                                    )
+                                )
+                            }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "Silent / Mute Trailer Video Audio",
+                            description = "Mute audio while playing the 720p Minecraft Trailer video on the dashboard (disable to hear full trailer audio)",
+                            checked = config.muteTrailerVideo,
+                            onCheckedChange = { muted ->
+                                onConfigChange(config.copy(muteTrailerVideo = muted))
+                            }
+                        )
+
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = CardSlateBg,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animatedPressScale { onCheckForUpdatesManual() }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                    Text(
+                                        text = "Check for Launcher Updates (HorizonZ v${HorizonNativeBridge.INSTALLED_LAUNCHER_VERSION})",
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        text = "Connected to official fork: github.com/${HorizonNativeBridge.GITHUB_FORK_REPO_SLUG}/releases",
+                                        fontSize = 12.sp,
+                                        color = SkyBlueAccent
+                                    )
+                                }
+                                Icon(Icons.Default.SystemUpdate, contentDescription = null, tint = SkyBlueAccent)
+                            }
+                        }
+
                         ZalithSettingDropdownCard(
                             title = "Theme Palette",
                             description = "Choose the color scheme used across HorizonZ Launcher (applies immediately)",
