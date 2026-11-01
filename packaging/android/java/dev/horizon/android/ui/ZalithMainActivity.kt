@@ -11,6 +11,7 @@ import android.annotation.SuppressLint
 import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -291,7 +292,7 @@ class ZalithMainActivity : ComponentActivity() {
                             // has actually taken over the foreground!
                             if (isLauncherHibernated || isLaunchingSplash) {
                                 isGameProcessSleeping = true
-                                HorizonNativeBridge.trimMemoryCaches()
+                                HorizonNativeBridge.releaseMemoryForGameLaunch(context)
                             }
                         }
                         else -> {}
@@ -344,7 +345,7 @@ class ZalithMainActivity : ComponentActivity() {
                             },
                             onCheckForUpdatesManual = {
                                 scope.launch {
-                                    Toast.makeText(context, "Checking github.com/Fadiba21/Horizonz-Launcher/releases...", Toast.LENGTH_SHORT).show()
+                                    Toast.makeText(context, "Checking github.com/Fadiba21/HorizonZ-Launcher-Android/releases...", Toast.LENGTH_SHORT).show()
                                     val found = withContext(Dispatchers.IO) {
                                         HorizonNativeBridge.checkGithubLatestReleaseUpdate()
                                     }
@@ -1994,195 +1995,139 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
     onVideoEndedOrError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val safeStreamUrl = directStreamUrl.replace("'", "\\'")
-    val htmlContent = remember(videoId, directStreamUrl) {
-        """
-        <!DOCTYPE html>
-        <html>
-        <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-        <style>
-          html, body {
-            margin: 0; padding: 0; width: 100%; height: 100%;
-            background-color: #0B0F14; overflow: hidden;
-          }
-          #cinematic-canvas {
-            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-            z-index: 1;
-          }
-          #direct-video {
-            position: absolute; top: -4%; left: -4%; width: 108%; height: 108%;
-            object-fit: cover; z-index: 2; opacity: 0;
-            transition: opacity 0.55s ease-in-out;
-            pointer-events: none;
-          }
-        </style>
-        </head>
-        <body>
-          <canvas id="cinematic-canvas" width="1280" height="720"></canvas>
-          <video id="direct-video" autoplay playsinline preload="auto"></video>
-          <script>
-            var isMutedState = ${if (isMuted) "true" else "false"};
-            var isPausedState = ${if (isPaused) "true" else "false"};
-            var directStream = '$safeStreamUrl';
-            var vidEl = document.getElementById('direct-video');
-            var canvas = document.getElementById('cinematic-canvas');
-            var ctx = canvas.getContext('2d');
+    var webViewRef by remember { mutableStateOf<WebView?>(null) }
 
-            var frameFiles = [
-              'file:///android_res/drawable/mc_wall_01.jpg',
-              'file:///android_res/drawable/mc_wall_02.jpg',
-              'file:///android_res/drawable/mc_wall_03.jpg',
-              'file:///android_res/drawable/mc_wall_04.jpg',
-              'file:///android_res/drawable/mc_wall_05.jpg',
-              'file:///android_res/drawable/mc_wall_06.jpg',
-              'file:///android_res/drawable/mc_wall_12.jpg',
-              'file:///android_res/drawable/mc_wall_13.jpg'
-            ];
-            var loadedImgs = [];
-            for (var i = 0; i < frameFiles.length; i++) {
-              var im = new Image();
-              im.src = frameFiles[i];
-              loadedImgs.push(im);
-            }
-
-            var audioCtx = null;
-            var directVideoPlaying = false;
-            var chordNotes = [
-              [261.63, 329.63, 392.00, 493.88],
-              [220.00, 261.63, 329.63, 392.00],
-              [174.61, 220.00, 261.63, 349.23],
-              [196.00, 246.94, 293.66, 392.00]
-            ];
-            var chordIdx = 0;
-
-            function playAmbientChord() {
-              if (isMutedState || isPausedState || directVideoPlaying) return;
-              try {
-                if (!audioCtx) {
-                  var AC = window.AudioContext || window.webkitAudioContext;
-                  if (AC) audioCtx = new AC();
-                }
-                if (!audioCtx) return;
-                if (audioCtx.state === 'suspended') audioCtx.resume();
-                var now = audioCtx.currentTime;
-                var notes = chordNotes[chordIdx % chordNotes.length];
-                chordIdx++;
-                for (var n = 0; n < notes.length; n++) {
-                  var osc = audioCtx.createOscillator();
-                  var gain = audioCtx.createGain();
-                  osc.type = (n % 2 === 0) ? 'sine' : 'triangle';
-                  osc.frequency.setValueAtTime(notes[n], now + n * 0.18);
-                  gain.gain.setValueAtTime(0.0001, now + n * 0.18);
-                  gain.gain.exponentialRampToValueAtTime(0.035, now + n * 0.18 + 0.45);
-                  gain.gain.exponentialRampToValueAtTime(0.0001, now + n * 0.18 + 2.6);
-                  osc.connect(gain);
-                  gain.connect(audioCtx.destination);
-                  osc.start(now + n * 0.18);
-                  osc.stop(now + n * 0.18 + 2.7);
-                }
-              } catch (e) {}
-            }
-
-            setInterval(playAmbientChord, 2800);
-
-            var startTime = performance.now();
-            function renderCinematicTrailer(now) {
-              if (!isPausedState && !directVideoPlaying) {
-                var elapsed = (now - startTime) / 1000.0;
-                var sceneDuration = 4.5;
-                var totalScenes = loadedImgs.length;
-                var sceneFloat = elapsed / sceneDuration;
-                var idxA = Math.floor(sceneFloat) % totalScenes;
-                var idxB = (idxA + 1) % totalScenes;
-                var frac = sceneFloat - Math.floor(sceneFloat);
-
-                ctx.fillStyle = '#0B0F14';
-                ctx.fillRect(0, 0, 1280, 720);
-
-                var imgA = loadedImgs[idxA];
-                var imgB = loadedImgs[idxB];
-                if (imgA && imgA.complete && imgA.naturalWidth > 0) {
-                  var zoomA = 1.04 + frac * 0.10;
-                  var panXA = Math.sin(idxA * 1.7) * 28 * frac;
-                  var panYA = Math.cos(idxA * 1.3) * 16 * frac;
-                  var wA = 1280 * zoomA;
-                  var hA = 720 * zoomA;
-                  ctx.globalAlpha = 1.0;
-                  ctx.drawImage(imgA, (1280 - wA) * 0.5 + panXA, (720 - hA) * 0.5 + panYA, wA, hA);
-                }
-                if (frac > 0.75 && imgB && imgB.complete && imgB.naturalWidth > 0) {
-                  var alphaB = (frac - 0.75) / 0.25;
-                  var zoomB = 1.04;
-                  var wB = 1280 * zoomB;
-                  var hB = 720 * zoomB;
-                  ctx.globalAlpha = alphaB;
-                  ctx.drawImage(imgB, (1280 - wB) * 0.5, (720 - hB) * 0.5, wB, hB);
-                }
-                ctx.globalAlpha = 1.0;
+    val buildControllerJs = remember(videoId) {
+        { mutedFlag: Boolean, pausedFlag: Boolean ->
+            val mStr = if (mutedFlag) "true" else "false"
+            val pStr = if (pausedFlag) "true" else "false"
+            """
+            (function() {
+              window.__hzMuted = $mStr;
+              window.__hzPaused = $pStr;
+              if (!document.getElementById('__hz_style')) {
+                var st = document.createElement('style');
+                st.id = '__hz_style';
+                st.innerHTML = 'html, body { margin:0 !important; padding:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; overflow:hidden !important; } ' +
+                  '.ytp-chrome-top, .ytp-chrome-bottom, .ytp-watermark, .ytp-pause-overlay, .ytp-gradient-top, .ytp-gradient-bottom, .ytp-show-cards-title, .ytp-endscreen-content, .ytp-ce-element, .ytp-PaidContentOverlay, .iv-branding, ytm-mobile-topbar-renderer, ytm-slim-video-metadata-section-renderer, ytm-item-section-renderer, ytm-pivot-bar-renderer, ytm-companion-ad-renderer, .player-controls-content { display:none !important; opacity:0 !important; pointer-events:none !important; } ' +
+                  '.html5-video-player, #player, #player-container-id, .html5-video-container { position:fixed !important; inset:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; z-index:2147483646 !important; } ' +
+                  'video.html5-main-video, video { position:fixed !important; top:-4% !important; left:-4% !important; width:108vw !important; height:108vh !important; object-fit:cover !important; background:#000 !important; z-index:2147483647 !important; pointer-events:none !important; }';
+                if (document.head) document.head.appendChild(st);
               }
-              requestAnimationFrame(renderCinematicTrailer);
-            }
-            requestAnimationFrame(renderCinematicTrailer);
-
-            if (directStream && directStream.indexOf('http') === 0) {
-              vidEl.src = directStream;
-              vidEl.muted = isMutedState;
-              vidEl.volume = 1.0;
-              vidEl.onplaying = function() {
-                directVideoPlaying = true;
-                vidEl.style.opacity = '1';
-              };
-              vidEl.onended = function() {
-                window.location.href = 'horizonz://trailer-ended';
-              };
-              vidEl.onerror = function() {
-                directVideoPlaying = false;
-                vidEl.style.opacity = '0';
-              };
-              var p = vidEl.play();
-              if (p && p.catch) {
-                p.catch(function() {
-                  vidEl.muted = true;
-                  vidEl.play();
-                });
+              if (!window.__hzTimer) {
+                window.__hzFallbackTried = false;
+                window.__hzTimer = setInterval(function() {
+                  try {
+                    var errEl = document.querySelector('.ytp-error, .ytp-error-content-wrap');
+                    if (errEl && errEl.offsetWidth > 0 && !window.__hzFallbackTried && location.pathname.indexOf('/embed/') === 0) {
+                      window.__hzFallbackTried = true;
+                      window.location.href = 'horizonz://watch-fallback';
+                      return;
+                    }
+                    var mp = document.getElementById('movie_player');
+                    if (mp && mp.setPlaybackQualityRange) {
+                      try { mp.setPlaybackQualityRange('hd720', 'hd720'); } catch(e) {}
+                    }
+                    var v = document.querySelector('video');
+                    if (v) {
+                      v.muted = !!window.__hzMuted;
+                      if (!window.__hzMuted) { v.volume = 1.0; }
+                      v.setAttribute('playsinline', 'true');
+                      v.setAttribute('webkit-playsinline', 'true');
+                      if (!v.__hzHooked) {
+                        v.__hzHooked = true;
+                        v.addEventListener('ended', function() {
+                          window.location.href = 'horizonz://trailer-ended';
+                        });
+                      }
+                      if (window.__hzPaused) {
+                        if (!v.paused) v.pause();
+                      } else if (v.paused) {
+                        var playBtn = document.querySelector('.ytp-large-play-button, button.ytp-play-button');
+                        if (playBtn) { try { playBtn.click(); } catch(e) {} }
+                        var pr = v.play();
+                        if (pr && pr.catch) {
+                          pr.catch(function() {
+                            v.muted = true;
+                            v.play().catch(function(){});
+                          });
+                        }
+                      }
+                    } else {
+                      var lpb = document.querySelector('.ytp-large-play-button');
+                      if (lpb && !window.__hzPaused) { try { lpb.click(); } catch(e) {} }
+                    }
+                  } catch (e) {}
+                }, 350);
               }
-            }
-
-            function setHorizonMuted(muteFlag) {
-              isMutedState = muteFlag;
-              if (vidEl) {
-                vidEl.muted = muteFlag;
-                if (!muteFlag) vidEl.volume = 1.0;
-              }
-              if (!muteFlag && !directVideoPlaying) {
-                playAmbientChord();
-              }
-            }
-
-            function setHorizonPaused(pauseFlag) {
-              isPausedState = pauseFlag;
-              if (vidEl && directVideoPlaying) {
-                if (pauseFlag) vidEl.pause();
-                else vidEl.play();
-              }
-            }
-          </script>
-        </body>
-        </html>
-        """.trimIndent()
+            })();
+            """.trimIndent()
+        }
     }
 
-    var webViewRef by remember { mutableStateOf<WebView?>(null) }
+    val loadTrailerIntoWebView = remember {
+        { wv: WebView, vid: String, streamUrl: String, muted: Boolean, useMobileWatch: Boolean ->
+            val muteParam = if (muted) 1 else 0
+            if (streamUrl.startsWith("http") && !useMobileWatch) {
+                val safeStream = streamUrl.replace("'", "\'")
+                val directHtml = """
+                    <!DOCTYPE html>
+                    <html>
+                    <head>
+                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                    <style>
+                      html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
+                      video { position:fixed; top:-4%; left:-4%; width:108%; height:108%; object-fit:cover; background:#000; }
+                    </style>
+                    </head>
+                    <body>
+                      <video id="v" src='$safeStream' autoplay playsinline></video>
+                      <script>
+                        window.__hzMuted = ${if (muted) "true" else "false"};
+                        window.__hzPaused = false;
+                        var v = document.getElementById('v');
+                        v.muted = window.__hzMuted;
+                        v.volume = 1.0;
+                        v.onended = function() { window.location.href = 'horizonz://trailer-ended'; };
+                        v.onerror = function() { window.location.href = 'horizonz://embed-fallback'; };
+                        var p = v.play();
+                        if (p && p.catch) { p.catch(function() { v.muted = true; v.play(); }); }
+                      </script>
+                    </body>
+                    </html>
+                """.trimIndent()
+                wv.loadDataWithBaseURL("https://www.minecraft.net/", directHtml, "text/html", "utf-8", null)
+            } else if (useMobileWatch) {
+                val watchUrl = "https://m.youtube.com/watch?v=$vid&autoplay=1&mute=$muteParam&playsinline=1"
+                wv.loadUrl(
+                    watchUrl,
+                    mapOf(
+                        "Referer" to "https://www.minecraft.net/",
+                        "Origin" to "https://www.minecraft.net"
+                    )
+                )
+            } else {
+                val embedUrl = "https://www.youtube.com/embed/$vid?autoplay=1&mute=$muteParam&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&fs=0&playsinline=1&enablejsapi=1&loop=1&playlist=$vid&vq=hd720&origin=https://www.minecraft.net"
+                wv.loadUrl(
+                    embedUrl,
+                    mapOf(
+                        "Referer" to "https://www.minecraft.net/",
+                        "Origin" to "https://www.minecraft.net"
+                    )
+                )
+            }
+        }
+    }
 
     DisposableEffect(Unit) {
         onDispose {
             webViewRef?.let { wv ->
                 runCatching {
-                    wv.evaluateJavascript("if(window.setHorizonPaused) setHorizonPaused(true);", null)
+                    wv.stopLoading()
+                    wv.loadUrl("about:blank")
                     wv.onPause()
                     wv.pauseTimers()
-                    wv.stopLoading()
+                    wv.removeAllViews()
                     wv.destroy()
                 }
             }
@@ -2191,8 +2136,9 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
     }
 
     LaunchedEffect(isMuted, webViewRef) {
+        val mStr = if (isMuted) "true" else "false"
         webViewRef?.evaluateJavascript(
-            "if(window.setHorizonMuted) setHorizonMuted(${if (isMuted) "true" else "false"});",
+            "(function(){ window.__hzMuted = $mStr; var v = document.querySelector('video'); if (v) { v.muted = $mStr; if (!$mStr) { v.volume = 1.0; v.play().catch(function(){}); } } })();",
             null
         )
     }
@@ -2200,12 +2146,13 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
     LaunchedEffect(isPaused, webViewRef) {
         webViewRef?.let { wv ->
             if (isPaused) {
-                wv.evaluateJavascript("if(window.setHorizonPaused) setHorizonPaused(true);", null)
+                wv.evaluateJavascript("(function(){ window.__hzPaused = true; var v = document.querySelector('video'); if(v) v.pause(); })();", null)
                 wv.onPause()
+                wv.pauseTimers()
             } else {
                 wv.onResume()
                 wv.resumeTimers()
-                wv.evaluateJavascript("if(window.setHorizonPaused) setHorizonPaused(false);", null)
+                wv.evaluateJavascript("(function(){ window.__hzPaused = false; var v = document.querySelector('video'); if(v) v.play().catch(function(){}); })();", null)
             }
         }
     }
@@ -2221,29 +2168,54 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                 setBackgroundColor(android.graphics.Color.BLACK)
                 isClickable = false
                 isFocusable = false
+                runCatching {
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+                }
                 settings.apply {
                     javaScriptEnabled = true
                     mediaPlaybackRequiresUserGesture = false
                     domStorageEnabled = true
+                    databaseEnabled = true
                     allowFileAccess = true
                     loadsImagesAutomatically = true
+                    useWideViewPort = true
+                    loadWithOverviewMode = true
                     cacheMode = WebSettings.LOAD_DEFAULT
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    userAgentString = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                    userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36"
                 }
                 webChromeClient = WebChromeClient()
                 webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                        if (url != null && (url.startsWith("horizonz://trailer-ended") || url.startsWith("horizonz://trailer-error"))) {
-                            onVideoEndedOrError()
-                            return true
+                        if (url == null || view == null) return false
+                        when {
+                            url.startsWith("horizonz://trailer-ended") || url.startsWith("horizonz://trailer-error") -> {
+                                onVideoEndedOrError()
+                                return true
+                            }
+                            url.startsWith("horizonz://embed-fallback") -> {
+                                loadTrailerIntoWebView(view, videoId, "", isMuted, false)
+                                return true
+                            }
+                            url.startsWith("horizonz://watch-fallback") -> {
+                                loadTrailerIntoWebView(view, videoId, "", isMuted, true)
+                                return true
+                            }
                         }
                         return false
+                    }
+
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        if (view != null && url != null && url != "about:blank") {
+                            view.evaluateJavascript(buildControllerJs(isMuted, isPaused), null)
+                        }
                     }
                 }
                 val keyTag = "$videoId|$directStreamUrl"
                 tag = keyTag
-                loadDataWithBaseURL("file:///android_res/drawable/", htmlContent, "text/html", "utf-8", null)
+                loadTrailerIntoWebView(this, videoId, directStreamUrl, isMuted, false)
                 webViewRef = this
             }
         },
@@ -2251,7 +2223,7 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
             val keyTag = "$videoId|$directStreamUrl"
             if (wv.tag != keyTag) {
                 wv.tag = keyTag
-                wv.loadDataWithBaseURL("file:///android_res/drawable/", htmlContent, "text/html", "utf-8", null)
+                loadTrailerIntoWebView(wv, videoId, directStreamUrl, isMuted, false)
             }
         }
     )
@@ -3740,8 +3712,21 @@ private fun CleanVersionsViewport(
     onCancelDownload: () -> Unit,
     onSmartRepairAssets: () -> Unit
 ) {
-    var logExpanded by remember { mutableStateOf(true) }
+    var logExpanded by remember { mutableStateOf(false) }
     var showCancelConfirmDialog by remember { mutableStateOf(false) }
+    var showRepairConfirmDialog by remember { mutableStateOf(false) }
+    var showDeleteAllConfirmDialog by remember { mutableStateOf(false) }
+    var isRepairRunning by remember { mutableStateOf(false) }
+    var repairResultPopupMessage by remember { mutableStateOf<String?>(null) }
+    var deleteResultPopupMessage by remember { mutableStateOf<String?>(null) }
+    var sizeRefreshTick by remember { mutableIntStateOf(0) }
+    var installedSizeText by remember { mutableStateOf("Checking...") }
+
+    LaunchedEffect(installStatus.ready, installStatus.running, sizeRefreshTick) {
+        installedSizeText = withContext(Dispatchers.IO) {
+            HorizonNativeBridge.getInstalledAssetsDiskSizeFormatted(context)
+        }
+    }
 
     val chevronRotation by animateFloatAsState(
         targetValue = if (logExpanded) 180f else 0f,
@@ -3757,12 +3742,14 @@ private fun CleanVersionsViewport(
     if (showCancelConfirmDialog) {
         AlertDialog(
             onDismissRequest = { showCancelConfirmDialog = false },
+            containerColor = Color(0xFF1F262B),
             icon = { Icon(Icons.Default.Warning, contentDescription = null, tint = Color(0xFFFFB74D)) },
-            title = { Text("Batalkan Download?", style = MaterialTheme.typography.titleMedium) },
+            title = { Text("Batalkan Download?", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White) },
             text = {
                 Text(
-                    "Proses download aset yang sedang berjalan akan dihentikan dan file sementara yang sedang diunduh akan langsung dihapus.",
-                    fontSize = 13.sp
+                    "Proses unduhan aset Minecraft 26.3 yang sedang berjalan akan dihentikan dan file sementara (.partial) akan dibersihkan.",
+                    fontSize = 13.sp,
+                    color = Color(0xFFD5DEE5)
                 )
             },
             confirmButton = {
@@ -3770,15 +3757,141 @@ private fun CleanVersionsViewport(
                     onClick = {
                         showCancelConfirmDialog = false
                         onCancelDownload()
+                        sizeRefreshTick += 1
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))
                 ) {
-                    Text("Ya, Batalkan & Hapus", color = Color.White, fontSize = 12.sp)
+                    Text("Ya, Batalkan", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             },
             dismissButton = {
                 TextButton(onClick = { showCancelConfirmDialog = false }) {
-                    Text("Lanjutkan Download", fontSize = 12.sp)
+                    Text("Lanjutkan", fontSize = 12.sp, color = SkyBlueAccent)
+                }
+            }
+        )
+    }
+
+    if (showRepairConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showRepairConfirmDialog = false },
+            containerColor = Color(0xFF1F262B),
+            icon = { Icon(Icons.Default.Build, contentDescription = null, tint = SkyBlueAccent) },
+            title = { Text("Smart Repair Aset Minecraft 26.3", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White) },
+            text = {
+                Text(
+                    "Sistem akan memeriksa kelengkapan file engine, tabel worldgen 26.3, audio, dan 60 ikon kontrol sentuh.\n\nFile yang rusak atau hilang akan dipulihkan otomatis tanpa menghapus data dunia (Saves) atau Mod Anda.",
+                    fontSize = 13.sp,
+                    color = Color(0xFFD5DEE5),
+                    lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showRepairConfirmDialog = false
+                        isRepairRunning = true
+                        HorizonNativeBridge.smartRepairAssets(context, true) { _, resultMsg ->
+                            isRepairRunning = false
+                            sizeRefreshTick += 1
+                            repairResultPopupMessage = resultMsg
+                        }
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SkyBlueAccent)
+                ) {
+                    Text("Mulai Repair Sekarang", color = SkyBlueDarkText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRepairConfirmDialog = false }) {
+                    Text("Batal", fontSize = 12.sp, color = MutedSubtitleText)
+                }
+            }
+        )
+    }
+
+    repairResultPopupMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { repairResultPopupMessage = null },
+            containerColor = Color(0xFF1F262B),
+            icon = { Icon(Icons.Default.CheckCircle, contentDescription = null, tint = Color(0xFF81C784)) },
+            title = { Text("Hasil Smart Repair Aset", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White) },
+            text = {
+                Text(
+                    text = msg,
+                    fontSize = 13.sp,
+                    color = Color(0xFFD5DEE5),
+                    lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { repairResultPopupMessage = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = SkyBlueAccent)
+                ) {
+                    Text("OK, Mengerti", color = SkyBlueDarkText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            }
+        )
+    }
+
+    if (showDeleteAllConfirmDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteAllConfirmDialog = false },
+            containerColor = Color(0xFF1F262B),
+            icon = { Icon(Icons.Default.DeleteForever, contentDescription = null, tint = Color(0xFFFF8A80)) },
+            title = { Text("Hapus Total Semua Aset Minecraft?", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White) },
+            text = {
+                Text(
+                    "Seluruh file aset Minecraft 26.3 (.local/horizon-client/26.3) akan dihapus total dari penyimpanan perangkat ($installedSizeText).\n\nAnda perlu mengunduh ulang aset jika ingin masuk ke dalam game lagi. Data Saves & Mods tetap aman.",
+                    fontSize = 13.sp,
+                    color = Color(0xFFD5DEE5),
+                    lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        showDeleteAllConfirmDialog = false
+                        HorizonNativeBridge.deleteAllMinecraftAssets(context, true)
+                        sizeRefreshTick += 1
+                        deleteResultPopupMessage = "Seluruh aset Minecraft 26.3 berhasil dihapus total dari perangkat. Status aset kini direset ke 0 MB (Belum Terpasang)."
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE53935))
+                ) {
+                    Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color.White, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text("Ya, Hapus Total", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDeleteAllConfirmDialog = false }) {
+                    Text("Batal", fontSize = 12.sp, color = MutedSubtitleText)
+                }
+            }
+        )
+    }
+
+    deleteResultPopupMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = { deleteResultPopupMessage = null },
+            containerColor = Color(0xFF1F262B),
+            icon = { Icon(Icons.Default.CheckCircle, contentDescription = null, tint = SkyBlueAccent) },
+            title = { Text("Aset Berhasil Dihapus Total", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = Color.White) },
+            text = {
+                Text(
+                    text = msg,
+                    fontSize = 13.sp,
+                    color = Color(0xFFD5DEE5),
+                    lineHeight = 18.sp
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { deleteResultPopupMessage = null },
+                    colors = ButtonDefaults.buttonColors(containerColor = SkyBlueAccent)
+                ) {
+                    Text("Selesai", color = SkyBlueDarkText, fontWeight = FontWeight.Bold, fontSize = 12.sp)
                 }
             }
         )
@@ -3794,32 +3907,76 @@ private fun CleanVersionsViewport(
                 .fillMaxSize()
                 .padding(14.dp)
                 .verticalScroll(rememberScrollState()),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            // Header Row: Simple Title + Status Pill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Game & Assets Manager", fontSize = 15.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                if (!installStatus.running) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = SubRailCapsuleActive,
-                        modifier = Modifier.animatedPressScale(onClick = onSmartRepairAssets)
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = "Game & Assets Minecraft",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color.White
+                    )
+                    Text(
+                        text = "Kelola instalasi aset resmi, perbaikan otomatis (Repair), atau hapus total aset",
+                        fontSize = 11.sp,
+                        color = MutedSubtitleText
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = when {
+                        installStatus.ready -> Color(0xFF1E3E29)
+                        installStatus.running -> SubRailCapsuleActive
+                        else -> Color(0xFF3E3117)
+                    }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(Icons.Default.Build, contentDescription = null, tint = SkyBlueAccent, modifier = Modifier.size(14.dp))
-                            Text("Smart Repair (Check Missing/Corrupt)", fontSize = 11.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                        }
+                        Icon(
+                            imageVector = when {
+                                installStatus.ready -> Icons.Default.CheckCircle
+                                installStatus.running -> Icons.Default.CloudDownload
+                                else -> Icons.Default.Info
+                            },
+                            contentDescription = null,
+                            tint = when {
+                                installStatus.ready -> Color(0xFF81C784)
+                                installStatus.running -> SkyBlueAccent
+                                else -> Color(0xFFFFD54F)
+                            },
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = when {
+                                isRepairRunning -> "Memeriksa & Memperbaiki..."
+                                installStatus.ready -> "Siap Dimainkan (100%)"
+                                installStatus.paused -> "Dijeda (${installStatus.percent}%)"
+                                installStatus.running -> "Mengunduh (${installStatus.percent}%)"
+                                else -> "Belum Terpasang"
+                            },
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = when {
+                                installStatus.ready -> Color(0xFF81C784)
+                                installStatus.running -> SkyBlueAccent
+                                else -> Color(0xFFFFD54F)
+                            }
+                        )
                     }
                 }
             }
 
+            // Main Clean Version & Assets Card
             Surface(
                 shape = RoundedCornerShape(18.dp),
                 color = CardRowBg,
@@ -3827,168 +3984,152 @@ private fun CleanVersionsViewport(
             ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
+                    // Row 1: Icon + Version Name + 3 Simple Summary Pills (Zero Overlap)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
-                        Row(
+                        MinecraftGrassCubeIcon(size = 44.dp)
+                        Column(
                             modifier = Modifier.weight(1f),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            MinecraftGrassCubeIcon(size = 42.dp)
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Text(
-                                        text = "Minecraft 26.3",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 15.sp,
-                                        color = Color.White
-                                    )
-                                    LavenderTagBadge(text = "Rust Native")
-                                }
-                                Spacer(Modifier.height(2.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
                                 Text(
-                                    text = if (installStatus.ready) "All game files, worldgen tables, and 60 touch controls installed"
-                                    else if (installStatus.running) installStatus.stage
-                                    else "Download official game & assets (Pause / Resume / Background supported)",
+                                    text = "Minecraft 26.3",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 15.sp,
+                                    color = Color.White
+                                )
+                                LavenderTagBadge(text = "Rust Engine")
+                                LavenderTagBadge(text = "v0.7.6 Base")
+                            }
+                            Text(
+                                text = when {
+                                    installStatus.ready -> "Aset lengkap terpasang • Siap langsung masuk ke dalam game"
+                                    installStatus.running -> "${installStatus.stage} ${if (installStatus.speedText.isNotBlank()) "• ${installStatus.speedText}" else ""}"
+                                    else -> "Unduh paket aset resmi Mojang untuk mulai bermain Minecraft 26.3"
+                                },
+                                fontSize = 11.sp,
+                                color = if (installStatus.ready) Color(0xFF81C784) else MutedSubtitleText,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+
+                    // Row 2: 3 Equal Simple Info Cards (Engine, Controls, Storage Size)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF1B2126),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text("Status Aset", fontSize = 10.sp, color = MutedSubtitleText)
+                                Text(
+                                    text = if (installStatus.ready) "Lengkap (100%)" else "${installStatus.percent}% Terunduh",
                                     fontSize = 12.sp,
-                                    color = if (installStatus.ready) Color(0xFF81C784) else MutedSubtitleText
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (installStatus.ready) Color(0xFF81C784) else Color.White,
+                                    maxLines = 1
                                 )
                             }
                         }
 
-                        Spacer(Modifier.width(8.dp))
-
-                        if (installStatus.running) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = SkyBlueAccent,
-                                    modifier = Modifier.animatedPressScale {
-                                        if (installStatus.paused) onResumeDownload() else onPauseDownload()
-                                    }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = if (installStatus.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
-                                            contentDescription = null,
-                                            tint = SkyBlueDarkText,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Text(
-                                            text = if (installStatus.paused) "Resume" else "Pause",
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = SkyBlueDarkText
-                                        )
-                                    }
-                                }
-                                Surface(
-                                    shape = RoundedCornerShape(12.dp),
-                                    color = Color(0xFF3A2326),
-                                    modifier = Modifier.animatedPressScale { showCancelConfirmDialog = true }
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Icon(Icons.Default.Cancel, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(16.dp))
-                                        Text("Cancel", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFF8A80))
-                                    }
-                                }
-                            }
-                        } else {
-                            Surface(
-                                shape = RoundedCornerShape(12.dp),
-                                color = SkyBlueAccent,
-                                modifier = Modifier.animatedPressScale(
-                                    onClick = if (installStatus.ready) onSmartRepairAssets else onStartDownload
-                                )
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF1B2126),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = if (installStatus.ready) Icons.Default.Verified else Icons.Default.Download,
-                                        contentDescription = null,
-                                        tint = SkyBlueDarkText,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Text(
-                                        text = if (installStatus.ready) "Verify" else "Download",
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = SkyBlueDarkText
-                                    )
-                                }
+                                Text("Komponen", fontSize = 10.sp, color = MutedSubtitleText)
+                                Text(
+                                    text = "Worldgen + 60 Touch",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = SkyBlueAccent,
+                                    maxLines = 1
+                                )
+                            }
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color(0xFF1B2126),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text("Ukuran Aset", fontSize = 10.sp, color = MutedSubtitleText)
+                                Text(
+                                    text = installedSizeText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White,
+                                    maxLines = 1
+                                )
                             }
                         }
                     }
 
-                    if (installStatus.running || installStatus.done > 0L || installStatus.error.isNotEmpty()) {
+                    // Row 3: Progress Bar (shown cleanly when downloading or when progress > 0)
+                    if (installStatus.running || installStatus.done > 0L || isRepairRunning) {
                         Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = installStatus.stage,
+                                    text = if (isRepairRunning) "Memverifikasi & Memperbaiki File..." else installStatus.stage,
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = if (installStatus.paused) Color(0xFFFFB74D) else SkyBlueAccent
+                                    color = if (installStatus.paused) Color(0xFFFFB74D) else SkyBlueAccent,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
-                                val rightLabel = buildString {
-                                    if (installStatus.speedText.isNotBlank()) {
-                                        append(installStatus.speedText)
-                                        append(" • ")
-                                    }
-                                    if (installStatus.detail.isNotBlank()) {
-                                        append(installStatus.detail)
-                                        append(" ")
-                                    } else if (installStatus.total > 1L) {
-                                        append("${installStatus.done} / ${installStatus.total} ")
-                                    }
-                                    append("(${installStatus.percent}%)")
-                                }
+                                Spacer(Modifier.width(8.dp))
                                 Text(
-                                    text = rightLabel,
+                                    text = buildString {
+                                        if (installStatus.speedText.isNotBlank()) {
+                                            append(installStatus.speedText)
+                                            append(" • ")
+                                        }
+                                        append("${installStatus.percent}%")
+                                    },
                                     fontSize = 11.sp,
-                                    color = MutedSubtitleText
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color.White
                                 )
                             }
                             LinearProgressIndicator(
-                                progress = { animatedProgress },
-                                color = SkyBlueAccent,
+                                progress = { if (isRepairRunning) 1f else animatedProgress },
+                                color = if (installStatus.ready) Color(0xFF81C784) else SkyBlueAccent,
                                 trackColor = Color(0xFF33424B),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .height(7.dp)
                                     .clip(RoundedCornerShape(50))
                             )
-                            if (installStatus.currentUrl.isNotBlank()) {
-                                Text(
-                                    text = "Link: ${installStatus.currentUrl}",
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    color = MutedSubtitleText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
                         }
                     }
 
@@ -4000,16 +4141,177 @@ private fun CleanVersionsViewport(
                         ) {
                             Text(
                                 text = installStatus.error,
-                                fontSize = 12.sp,
-                                color = Color(0xFFFF6E6E),
+                                fontSize = 11.sp,
+                                color = Color(0xFFFF8A80),
                                 modifier = Modifier.padding(10.dp)
                             )
                         }
                     }
 
+                    // Row 4: Clean Action Buttons Bar (Download/Pause, Repair Pop-Up, Hapus Total Pop-Up)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (installStatus.running) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SkyBlueAccent,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .animatedPressScale {
+                                        if (installStatus.paused) onResumeDownload() else onPauseDownload()
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (installStatus.paused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                                        contentDescription = null,
+                                        tint = SkyBlueDarkText,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = if (installStatus.paused) "Lanjutkan Download" else "Jeda (Pause)",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SkyBlueDarkText,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF3A2326),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .animatedPressScale { showCancelConfirmDialog = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 12.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(Icons.Default.Cancel, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Batalkan Download",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFFF8A80),
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        } else {
+                            // 1. Download / Re-Download Button
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SkyBlueAccent,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .animatedPressScale {
+                                        if (installStatus.ready) {
+                                            showRepairConfirmDialog = true
+                                        } else {
+                                            onStartDownload()
+                                        }
+                                    }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = if (installStatus.ready) Icons.Default.Verified else Icons.Default.Download,
+                                        contentDescription = null,
+                                        tint = SkyBlueDarkText,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = if (installStatus.ready) "Verifikasi Aset" else "Download Aset",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SkyBlueDarkText,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            // 2. Smart Repair Button (Opens Repair Confirmation & Result Pop-Up!)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = SubRailCapsuleActive,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .animatedPressScale { showRepairConfirmDialog = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Build,
+                                        contentDescription = null,
+                                        tint = SkyBlueAccent,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Repair Aset",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+
+                            // 3. Hapus Total Semua Aset Button (Opens Delete All Confirmation Pop-Up!)
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color(0xFF3A2326),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .animatedPressScale { showDeleteAllConfirmDialog = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(vertical = 10.dp, horizontal = 10.dp),
+                                    horizontalArrangement = Arrangement.Center,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Outlined.Delete,
+                                        contentDescription = null,
+                                        tint = Color(0xFFFF8A80),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Spacer(Modifier.width(6.dp))
+                                    Text(
+                                        text = "Hapus Total Aset",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFFFF8A80),
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    // Row 5: Compact Collapsible Download & Repair Log
                     Surface(
-                        shape = RoundedCornerShape(14.dp),
-                        color = Color(0xFF1A2024),
+                        shape = RoundedCornerShape(12.dp),
+                        color = Color(0xFF181E22),
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Column(modifier = Modifier.fillMaxWidth()) {
@@ -4026,46 +4328,43 @@ private fun CleanVersionsViewport(
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
                                     Icon(
-                                        Icons.Default.Subject,
+                                        Icons.Default.Terminal,
                                         contentDescription = null,
-                                        modifier = Modifier.size(15.dp),
+                                        modifier = Modifier.size(14.dp),
                                         tint = SkyBlueAccent
                                     )
                                     Text(
-                                        text = "Download Process Log (URL & Speed)",
-                                        fontSize = 12.sp,
+                                        text = "Detail Log Aktivitas Aset",
+                                        fontSize = 11.sp,
                                         fontWeight = FontWeight.SemiBold,
-                                        color = Color.White
+                                        color = Color(0xFFD5DEE5)
                                     )
                                 }
 
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                                 ) {
-                                    TextButton(
-                                        onClick = {
+                                    Text(
+                                        text = "Salin Log",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SkyBlueAccent,
+                                        modifier = Modifier.clickable {
                                             val textToCopy = if (installStatus.logs.isNotEmpty()) {
                                                 installStatus.logs.joinToString("\n")
                                             } else {
                                                 "Stage: ${installStatus.stage} (${installStatus.percent}%)"
                                             }
                                             HorizonNativeBridge.copyToClipboard(context, "Download Log", textToCopy)
-                                        },
-                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(26.dp)
-                                    ) {
-                                        Icon(Icons.Default.ContentCopy, contentDescription = "Copy", tint = SkyBlueAccent, modifier = Modifier.size(13.dp))
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("Copy", fontSize = 11.sp, color = SkyBlueAccent)
-                                    }
-
+                                        }
+                                    )
                                     Icon(
                                         Icons.Default.ExpandMore,
-                                        contentDescription = if (logExpanded) "Minimize" else "Expand",
+                                        contentDescription = null,
                                         tint = Color.White,
                                         modifier = Modifier
-                                            .size(20.dp)
+                                            .size(18.dp)
                                             .rotate(chevronRotation)
                                     )
                                 }
@@ -4077,18 +4376,18 @@ private fun CleanVersionsViewport(
                                 exit = shrinkVertically(tween(180)) + fadeOut(tween(150))
                             ) {
                                 val logContent = if (installStatus.logs.isNotEmpty()) {
-                                    installStatus.logs.joinToString("\n")
+                                    installStatus.logs.takeLast(25).joinToString("\n")
                                 } else if (installStatus.ready) {
                                     "[OK] Minecraft 26.3 assets, worldgen tables, and 60/60 touch controls verified."
                                 } else {
-                                    "Tap 'Download' or 'INSTALL' to begin. Supports Pause, Resume, Cancel & Background Notification."
+                                    "Tekan 'Download Aset' untuk mengunduh atau 'Repair Aset' untuk memeriksa file."
                                 }
                                 Box(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .heightIn(min = 75.dp, max = 155.dp)
+                                        .heightIn(min = 60.dp, max = 130.dp)
                                         .padding(start = 10.dp, end = 10.dp, bottom = 10.dp)
-                                        .clip(RoundedCornerShape(10.dp))
+                                        .clip(RoundedCornerShape(8.dp))
                                         .background(Color(0xFF0E1215))
                                         .padding(8.dp)
                                         .verticalScroll(rememberScrollState())
@@ -4096,7 +4395,7 @@ private fun CleanVersionsViewport(
                                     Text(
                                         text = logContent,
                                         fontFamily = FontFamily.Monospace,
-                                        fontSize = 11.sp,
+                                        fontSize = 10.sp,
                                         color = Color(0xFFA5D6A7)
                                     )
                                 }
@@ -5174,8 +5473,10 @@ private fun CleanStoreViewport(
                                                         ) {
                                                             releases.forEach { rel ->
                                                                 val isDownloadingThis = storeProgress.running && storeProgress.activeItemId == detailProj.id
-                                                                val installedVerForProj = installedMap[detailProj.id] ?: installedMap[HorizonNativeBridge.sanitizeModId(detailProj.id)]
-                                                                val isThisExactVerInstalled = installedVerForProj != null && (installedVerForProj == rel.versionNumber || detailInstallState == StoreInstallState.INSTALLED && projectVersions.size == 1)
+                                                                val installedVerForProj = installedMap[detailProj.id]
+                                                                    ?: installedMap[detailProj.slug]
+                                                                    ?: installedMap[HorizonNativeBridge.sanitizeModId(detailProj.id)]
+                                                                val isThisExactVerInstalled = installedVerForProj != null && installedVerForProj == rel.versionNumber
                                                                 Surface(
                                                                     shape = RoundedCornerShape(12.dp),
                                                                     color = Color(0xFF1B2125),
@@ -5635,7 +5936,9 @@ private data class ManagerRowUiItem(
     val modDetail: ModPackageDetailInfo?,
     val saveDetail: WorldSaveDetailInfo?,
     val packDetail: ResourcePackDetailInfo?,
-    val iconImage: ImageBitmap?
+    val iconImage: ImageBitmap?,
+    val storeCatalogMatch: StoreCatalogItem? = null,
+    val hasStoreUpdate: Boolean = false
 )
 
 enum class FilesSortMode(val label: String) {
@@ -5754,8 +6057,14 @@ private fun CleanFilesViewport(
                         saveDetail != null -> "${saveDetail.difficulty} • ${saveDetail.playTimeFormatted} • Seed: ${saveDetail.worldSeed}"
                         else -> "File: ${file.name} (${file.length() / 1024} KB)"
                     }
+                    val catMatch = HorizonNativeBridge.findCatalogItemForLocalFile(file, currentFolder)
+                    val curVer = modDetail?.version ?: HorizonNativeBridge.getInstalledStoreVersionsMap(context, profileSlot)[HorizonNativeBridge.sanitizeModId(file.name)] ?: "1.0.0"
+                    val curTuple = HorizonNativeBridge.parseVersionNumbers(curVer)
+                    val latestTuple = catMatch?.let { HorizonNativeBridge.parseVersionNumbers(it.version) }
+                    val updateAvailable = catMatch != null && curTuple != null && latestTuple != null &&
+                        HorizonNativeBridge.compareVersionLists(latestTuple, curTuple) > 0
                     ManagerRowUiItem(
-                        key = file.absolutePath,
+                        key = "${file.absolutePath}:${file.lastModified()}:$curVer",
                         file = file,
                         folder = currentFolder,
                         displayTitle = displayTitle,
@@ -5766,7 +6075,9 @@ private fun CleanFilesViewport(
                         modDetail = modDetail,
                         saveDetail = saveDetail,
                         packDetail = packDetail,
-                        iconImage = iconBmp
+                        iconImage = iconBmp,
+                        storeCatalogMatch = catMatch,
+                        hasStoreUpdate = updateAvailable
                     )
                 }
             }
@@ -6262,6 +6573,37 @@ private fun FileManagerRowCard(
                             "mods" -> {
                                 LavenderTagBadge(text = "v${modDetail?.version ?: "1.0.0"}")
                                 LavenderTagBadge(text = "26.3")
+                                if (rowItem.hasStoreUpdate && rowItem.storeCatalogMatch != null) {
+                                    Surface(
+                                        shape = RoundedCornerShape(6.dp),
+                                        color = Color(0xFFFFB74D),
+                                        modifier = Modifier.clickable {
+                                            val targetItem = rowItem.storeCatalogMatch
+                                            Toast.makeText(context, "Mengupdate ${targetItem.title} ke v${targetItem.version}...", Toast.LENGTH_SHORT).show()
+                                            HorizonNativeBridge.downloadAndInstallStoreItem(
+                                                context = context,
+                                                item = targetItem,
+                                                profileSlot = profileSlot,
+                                                logEnabled = logEnabled,
+                                                onProgress = {},
+                                                onComplete = { _, msg ->
+                                                    android.os.Handler(android.os.Looper.getMainLooper()).post {
+                                                        onTriggerRefresh()
+                                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    ) {
+                                        Text(
+                                            text = "↑ Update v${rowItem.storeCatalogMatch.version}",
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.ExtraBold,
+                                            color = Color(0xFF261600),
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
                                     color = if (isEnabled) Color(0xFF1E3E29) else Color(0xFF3A2326)
@@ -6640,8 +6982,16 @@ private fun CleanSettingsViewport(
             ) {
                 when (section) {
                     SettingsSubCategory.RENDERER -> {
+                        ZalithRamAllocationCard(
+                            context = context,
+                            ramAllocationMb = config.ramAllocationMb,
+                            onRamChange = { newRamMb ->
+                                onConfigChange(config.copy(ramAllocationMb = newRamMb))
+                            }
+                        )
+
                         ZalithSettingDropdownCard(
-                            title = "Graphics API (Horizon Android 0.7.5)",
+                            title = "Graphics API (Horizon Android 0.7.6)",
                             description = "Set the native Vulkan / OpenGL ES renderer used by Minecraft 26.3",
                             selectedItem = config.renderer,
                             options = HorizonRendererMode.entries,
@@ -6716,6 +7066,14 @@ private fun CleanSettingsViewport(
                     }
 
                     SettingsSubCategory.GAME -> {
+                        ZalithRamAllocationCard(
+                            context = context,
+                            ramAllocationMb = config.ramAllocationMb,
+                            onRamChange = { newRamMb ->
+                                onConfigChange(config.copy(ramAllocationMb = newRamMb))
+                            }
+                        )
+
                         ZalithSettingDropdownCard(
                             title = "Game Profile Slot",
                             description = "Select which isolated profile directory (saves, mods, options.txt) is active",
@@ -7079,6 +7437,179 @@ private fun CleanSettingsViewport(
                             }
                         }
                     }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ZalithRamAllocationCard(
+    context: android.content.Context,
+    ramAllocationMb: Int,
+    onRamChange: (Int) -> Unit
+) {
+    val totalRamMb = remember { HorizonNativeBridge.getDeviceTotalRamMb(context) }
+    val availRamMb = remember(ramAllocationMb) { HorizonNativeBridge.getDeviceAvailableRamMb(context) }
+    val isUnlimited = ramAllocationMb <= 0
+    val minRamMb = 1024
+    val maxRamMb = totalRamMb.coerceAtLeast(2048)
+    val sliderDisplayMb = if (isUnlimited) {
+        maxRamMb
+    } else {
+        ramAllocationMb.coerceIn(minRamMb, maxRamMb)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(18.dp),
+        color = CardSlateBg,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "RAM Allocation (Minecraft 26.3 Engine)",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                        LavenderTagBadge(
+                            text = if (isUnlimited) "Unlimited (Default OS)" else "$sliderDisplayMb MB"
+                        )
+                    }
+                    Text(
+                        text = "RAM HP Terdeteksi: $totalRamMb MB (~${String.format(Locale.US, "%.1f", totalRamMb / 1024f)} GB) • Tersedia: $availRamMb MB",
+                        fontSize = 11.sp,
+                        color = SkyBlueAccent
+                    )
+                    Text(
+                        text = if (isUnlimited) {
+                            "Mode Default Aktif: Bebas mengikuti batas maksimal OS Android secara dinamis (Direkomendasikan)"
+                        } else {
+                            "Batas alokasi memori manual untuk runtime Rust, WGPU & tekstur Minecraft: $sliderDisplayMb MB"
+                        },
+                        fontSize = 11.sp,
+                        color = MutedSubtitleText
+                    )
+                }
+            }
+
+            // Mode Selector Pills: [ Bebas / Limit OS Android (Default) ]  [ Atur Manual (Slider) ]
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (isUnlimited) SkyBlueAccent else CardRowBg,
+                    modifier = Modifier
+                        .weight(1f)
+                        .animatedPressScale { onRamChange(0) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = if (isUnlimited) Icons.Default.CheckCircle else Icons.Default.AllInclusive,
+                            contentDescription = null,
+                            tint = if (isUnlimited) SkyBlueDarkText else SkyBlueAccent,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = "Bebas / Limit OS Android (Default)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isUnlimited) SkyBlueDarkText else Color.White,
+                            maxLines = 1
+                        )
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (!isUnlimited) SkyBlueAccent else CardRowBg,
+                    modifier = Modifier
+                        .weight(1f)
+                        .animatedPressScale {
+                            if (isUnlimited) {
+                                val recommended = ((totalRamMb * 3) / 4 / 256 * 256).coerceIn(minRamMb, maxRamMb)
+                                onRamChange(recommended)
+                            }
+                        }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(vertical = 8.dp, horizontal = 10.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Tune,
+                            contentDescription = null,
+                            tint = if (!isUnlimited) SkyBlueDarkText else SkyBlueAccent,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = if (!isUnlimited) "Manual: $sliderDisplayMb MB" else "Atur Manual (Slider)",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (!isUnlimited) SkyBlueDarkText else Color.White,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+
+            // Slider Row (1024 MB .. totalRamMb, step 256 MB)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Slider(
+                    value = sliderDisplayMb.toFloat(),
+                    onValueChange = { rawVal ->
+                        val snapped = ((rawVal.toInt() + 128) / 256) * 256
+                        val clamped = snapped.coerceIn(minRamMb, maxRamMb)
+                        onRamChange(clamped)
+                    },
+                    valueRange = minRamMb.toFloat()..maxRamMb.toFloat(),
+                    colors = SliderDefaults.colors(
+                        thumbColor = SkyBlueAccent,
+                        activeTrackColor = SkyBlueAccent,
+                        inactiveTrackColor = Color(0xFF33424B)
+                    ),
+                    modifier = Modifier.weight(1f)
+                )
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isUnlimited) SubRailCapsuleActive else SkyBlueAccent
+                ) {
+                    Text(
+                        text = if (isUnlimited) "OS Limit" else "$sliderDisplayMb MB",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = if (isUnlimited) SkyBlueAccent else SkyBlueDarkText,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                    )
                 }
             }
         }

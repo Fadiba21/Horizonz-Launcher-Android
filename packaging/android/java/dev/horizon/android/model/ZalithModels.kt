@@ -327,7 +327,8 @@ data class HorizonConfigState(
     val publicOnDeviceAssetDownload: Boolean = true,
     val backgroundMode: HorizonBackgroundMode = HorizonBackgroundMode.WALLPAPER,
     val useYoutubeTrailerWallpaper: Boolean = false,
-    val muteTrailerVideo: Boolean = false
+    val muteTrailerVideo: Boolean = false,
+    val ramAllocationMb: Int = 0
 )
 
 val MINECRAFT_SPLASH_QUOTES = listOf(

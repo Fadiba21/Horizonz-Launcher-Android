@@ -159,6 +159,40 @@ fn sanitize_and_repair_horizon_mods(home: &std::path::Path) {
     }
 }
 
+fn apply_horizonz_ram_allocation(home: &std::path::Path) {
+    let mem_file = home.join("horizon-memory.txt");
+    let mut ram_mb: u64 = 0;
+    let mut unlimited = true;
+    if let Ok(txt) = std::fs::read_to_string(&mem_file) {
+        for line in txt.lines() {
+            if let Some(v) = line.strip_prefix("ramAllocationMb:") {
+                ram_mb = v.trim().parse::<u64>().unwrap_or(0);
+            } else if let Some(u) = line.strip_prefix("unlimited:") {
+                unlimited = u.trim().eq_ignore_ascii_case("true");
+            }
+        }
+    }
+    if let Ok(env_mb) = std::env::var("HORIZON_RAM_ALLOCATION_MB") {
+        if let Ok(parsed) = env_mb.trim().parse::<u64>() {
+            ram_mb = parsed;
+            unlimited = parsed == 0;
+        }
+    }
+    if unlimited || ram_mb == 0 {
+        unsafe {
+            std::env::set_var("HORIZON_RAM_UNLIMITED", "1");
+        }
+    } else {
+        let clamped_mb = ram_mb.clamp(1024, 32768);
+        let budget_bytes = clamped_mb.saturating_mul(1024 * 1024);
+        unsafe {
+            std::env::set_var("HORIZON_RAM_UNLIMITED", "0");
+            std::env::set_var("HORIZON_MEMORY_BUDGET_BYTES", budget_bytes.to_string());
+            std::env::set_var("WGPU_MEMORY_BUDGET_MB", clamped_mb.to_string());
+        }
+    }
+}
+
 fn apply_horizonz_custom_skin(home: &std::path::Path) {
     let custom_skin = home.join("custom_skin_active.png");
     if !custom_skin.is_file() {
@@ -251,6 +285,7 @@ pub(super) struct Launcher {'''
             + "            return;\n"
             + "        }\n"
             + "        let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"38|Verifying Horizon Mods & Profile Catalog...\");\n"
+            + "        apply_horizonz_ram_allocation(&self.home);\n"
             + "        sanitize_and_repair_horizon_mods(&self.home);\n"
             + "        self.catalog.refresh(&self.home);\n"
             + "        let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"55|Creating Vulkan / WGPU Surface...\");\n"

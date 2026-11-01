@@ -145,12 +145,16 @@ public final class HorizonActivity extends NativeActivity {
         try {
             if (splashOverlayView != null) {
                 splashOverlayView.stopPolling();
+                if (splashOverlayView.getParent() instanceof ViewGroup) {
+                    ((ViewGroup) splashOverlayView.getParent()).removeView(splashOverlayView);
+                }
             }
             if (splashDialog != null && splashDialog.isShowing()) {
                 splashDialog.dismiss();
             }
         } catch (Exception ignored) {
         }
+        splashOverlayView = null;
         splashDialog = null;
         enableImmersiveFullscreen();
     }
@@ -176,13 +180,14 @@ public final class HorizonActivity extends NativeActivity {
                         runOnUiThread(this::returnToLauncherAndFinish);
                         break;
                     }
-                    Thread.sleep(150L);
+                    Thread.sleep(400L);
                 } catch (InterruptedException ignored) {
                     break;
                 }
             }
         }, "HorizonZ-ExitWatchdog");
         watchdog.setDaemon(true);
+        watchdog.setPriority(Thread.MIN_PRIORITY);
         watchdog.start();
     }
 
@@ -307,6 +312,23 @@ public final class HorizonActivity extends NativeActivity {
                 String renderBackend = intent.getStringExtra("HORIZON_WGPU_BACKEND");
                 if (renderBackend != null && !renderBackend.isEmpty()) {
                     Os.setenv("WGPU_BACKEND", renderBackend, true);
+                }
+
+                int ramAllocMb = intent.getIntExtra("HORIZON_RAM_ALLOCATION_MB", 0);
+                int deviceTotalRamMb = intent.getIntExtra("HORIZON_DEVICE_TOTAL_RAM_MB", 8192);
+                boolean unlimitedRam = (ramAllocMb <= 0);
+                int effectiveRamMb = unlimitedRam ? Math.max(2048, (int) (deviceTotalRamMb * 0.85f)) : Math.max(1024, ramAllocMb);
+                Os.setenv("HORIZON_RAM_ALLOCATION_MB", String.valueOf(ramAllocMb), true);
+                Os.setenv("HORIZON_RAM_UNLIMITED", unlimitedRam ? "1" : "0", true);
+                Os.setenv("HORIZON_EFFECTIVE_RAM_MB", String.valueOf(effectiveRamMb), true);
+                Os.setenv("WGPU_MEMORY_BUDGET_MB", String.valueOf(effectiveRamMb), true);
+
+                try {
+                    Class<?> vmRuntimeClass = Class.forName("dalvik.system.VMRuntime");
+                    Object vmRuntime = vmRuntimeClass.getDeclaredMethod("getRuntime").invoke(null);
+                    vmRuntimeClass.getDeclaredMethod("setTargetHeapUtilization", float.class)
+                        .invoke(vmRuntime, unlimitedRam ? 0.85f : 0.75f);
+                } catch (Throwable ignored) {
                 }
             }
         } catch (Exception e) {
@@ -503,7 +525,7 @@ public final class HorizonActivity extends NativeActivity {
 
         void stopPolling() {
             active = false;
-            handler.removeCallbacks(frameLoop);
+            handler.removeCallbacksAndMessages(null);
         }
 
         private void pollBootMilestone() {

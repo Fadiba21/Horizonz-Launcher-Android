@@ -1,4 +1,5 @@
 <!-- HORIZONZ_README_PRESERVE -->
+<!-- HORIZONZ_README_MOBILE_V2 -->
 <div align="center">
 
 <img src="docs/screenshots/horizonz-banner.jpg" width="100%" alt="HorizonZ Launcher — Official Android Fork of Horizon (Minecraft 26.3 in 100% Rust)" />
@@ -9,10 +10,10 @@
 ### Official Android Fork of [`horizon-rust/horizon`](https://github.com/horizon-rust/horizon) • Minecraft: Java Edition `26.3` in 100% Rust
 
 <!-- VERSION_BADGE_START -->
-[![Release Version](https://img.shields.io/badge/HorizonZ_Launcher-v1.4-43A047?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
+[![Release Version](https://img.shields.io/badge/HorizonZ_Launcher-v1.5-43A047?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
 <!-- VERSION_BADGE_END -->
 [![Upstream Engine](https://img.shields.io/badge/Upstream_Fork-horizon--rust%2Fhorizon_(26.3)-DEA584?style=for-the-badge&logo=rust&logoColor=black)](https://github.com/horizon-rust/horizon)
-[![Android Backend](https://img.shields.io/badge/Android_Runtime-Vasysik%2Fhorizon--android_(v0.7.5)-80D8FF?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/Vasysik/horizon-android)
+[![Android Backend](https://img.shields.io/badge/Android_Runtime-Vasysik%2Fhorizon--android_(v0.7.6)-80D8FF?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/Vasysik/horizon-android)
 [![Target ABIs](https://img.shields.io/badge/Target_ABIs-ARM64_(arm64--v8a)_%7C_ARM32_(armeabi--v7a)-00897B?style=for-the-badge&logo=arm&logoColor=white)](https://github.com/Fadiba21/Horizonz-Launcher/actions)
 [![Mod Registry](https://img.shields.io/badge/Mod_Store-playhorizon.dev%2Fmods-AB47BC?style=for-the-badge&logo=cloudflare&logoColor=white)](https://playhorizon.dev/mods)
 
@@ -42,7 +43,7 @@ This repository ([`Fadiba21/Horizonz-Launcher`](https://github.com/Fadiba21/Hori
 | Layer | Technology Stack | Upstream / Reference | Responsibility |
 | :--- | :--- | :--- | :--- |
 | **1. Core Voxel & Protocol Engine** | 100% Rust (`wgpu`, `vulkan`, `gles`, `tokio`, `ecs`) | [`horizon-rust/horizon`](https://github.com/horizon-rust/horizon) | Native Rust implementation of **Minecraft: Java Edition 26.3** world rendering, chunk meshing, physics, audio, and multiplayer networking without a JVM. |
-| **2. Android Native Runtime & Asset Installer** | Rust JNI (`android-activity`, `ndk`) + `HorizonActivity` | [`Vasysik/horizon-android`](https://github.com/Vasysik/horizon-android) (`v0.7.5`) | Bridges Android `SurfaceView`, multi-touch input, audio output, `HorizonDocumentsProvider` (SAF), and the 6-stage official Mojang 26.3 asset bootstrapper. |
+| **2. Android Native Runtime & Asset Installer** | Rust JNI (`android-activity`, `ndk`) + `HorizonActivity` | [`Vasysik/horizon-android`](https://github.com/Vasysik/horizon-android) (`v0.7.6`) | Bridges Android `SurfaceView`, multi-touch input, audio output, `HorizonDocumentsProvider` (SAF), and the 6-stage official Mojang 26.3 asset bootstrapper. |
 | **3. HorizonZ Material 3 Frontend UI** | Kotlin + Jetpack Compose (`ZalithMainActivity`) | Inspired by [`ZalithLauncher2Plus`](https://github.com/Star1xr/ZalithLauncher2Plus) & [`playhorizon.dev`](https://playhorizon.dev/mods) | Provides the landscape Material 3 dashboard, **100% `playhorizon.dev/mods` Store**, **Files & Mods Manager**, **2D/3D Skin Studio**, **Renderer & Control Settings**, and **Background Download Service**. |
 
 ---
@@ -155,7 +156,8 @@ Every setting adjusted in the **HorizonZ Settings** screen is synchronized with 
 
 ## ✨ Key Features
 
-- 🦀 **100% Native Rust Engine (`26.3`)** — Powered by [`horizon-rust/horizon`](https://github.com/horizon-rust/horizon) and [`Vasysik/horizon-android`](https://github.com/Vasysik/horizon-android) (`v0.7.5`) for high FPS and low memory usage on Android.
+- 🦀 **100% Native Rust Engine (`26.3`)** — Powered by [`horizon-rust/horizon`](https://github.com/horizon-rust/horizon) and [`Vasysik/horizon-android`](https://github.com/Vasysik/horizon-android) (`v0.7.6`) for high FPS and low memory usage on Android.
+- 🎬 **Dashboard Trailer & RAM Allocation** — Includes an embedded YouTube trailer player and a configurable RAM allocation slider, with Android’s OS-managed limit as the default.
 - 📱 **Strict ARM64 & ARM32 Support** — Native builds for 64-bit (`arm64-v8a` / `aarch64-linux-android`) and 32-bit (`armeabi-v7a` / `armv7-linux-androideabi`) Android devices running Android 9.0+ (`minSdk 28`, `targetSdk 35`).
 - 🛒 **Official `playhorizon.dev` Store** — Smart button states (`Installed ✓`, `Update ↑`, `Installing...`, `Cancel ✕`, `Incompatible`) synchronized in real time with the local Mods & Packs Manager.
 - 🧩 **Full Files & Mods Manager** — Manage **Mods (`.hmod`)**, **Saves (Worlds)**, **Resource Packs**, and **Shader Packs** with animated slide/fade transitions and confirmation dialogs before deletion.
@@ -168,9 +170,9 @@ Every setting adjusted in the **HorizonZ Settings** screen is synchronized with 
 ## 📥 Download & Installation
 
 <!-- LATEST_VERSION_START -->
-1. Go to the [**HorizonZ — Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases) page and download the latest **HorizonZ v1.4** APK matching your device architecture:
-   - **`HorizonZ-Launcher-1.4-arm64-v8a.apk`** — Recommended for modern 64-bit Android phones and tablets.
-   - **`HorizonZ-Launcher-1.4-armeabi-v7a.apk`** — For 32-bit ARMv7 Android devices.
+1. Go to the [**HorizonZ — Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases) page and download the latest **HorizonZ v1.5** APK matching your device architecture:
+   - **`HorizonZ-Launcher-1.5-arm64-v8a.apk`** — Recommended for modern 64-bit Android phones and tablets.
+   - **`HorizonZ-Launcher-1.5-armeabi-v7a.apk`** — For 32-bit ARMv7 Android devices.
 <!-- LATEST_VERSION_END -->
 2. Install the APK on your Android device (Android 9.0 Pie / API 28 or newer).
 3. Open **HorizonZ**, choose or create your player profile in **Account & Skins**, and optionally install native `.hmod` mods from the **Store** tab.
