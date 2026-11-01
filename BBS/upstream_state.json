@@ -12,5 +12,5 @@
     "packaging/android/bedrock-controls.json": "c7302b2d98bf2e989c367ba8da6807c6981099e0c73b83ad42ad54fb9d2926a3"
   },
   "upstream_release_tag": "v0.7.6",
-  "horizonz_version": "1.6"
+  "horizonz_version": "1.7"
 }

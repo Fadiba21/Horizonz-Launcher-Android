@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 1.6 APK (${{ matrix.abi }})
+    name: Build HorizonZ 1.7 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Clone Latest Vasysik/horizon-android Engine & Apply HorizonZ 1.6 Patches
+      - name: Clone Latest Vasysik/horizon-android Engine & Apply HorizonZ 1.7 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           git clone --depth 1 --branch android https://github.com/Vasysik/horizon-android.git /tmp/horizon-upstream
@@ -228,18 +228,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-1.6-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-1.7-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-1.6-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-1.6-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-1.7-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-1.7-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 1.6 Release APKs
+    name: Publish HorizonZ 1.7 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -259,14 +259,11 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v1.6.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v1.6 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v1.7.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v1.7 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            ## HorizonZ - Launcher v1.6 (Official Android Fork of `horizon-rust/horizon`)
-            - **Native ARM64 (`arm64-v8a`) & ARM32 (`armeabi-v7a`) Builds**: Built from the latest upstream `Vasysik/horizon-android` (`v0.7.6`) + `horizon-rust/horizon` (`26.3`) Rust engine.
-            - **Updated Fork Release Update Detector**: Checks `Fadiba21/Horizonz-Launcher/releases` with automatic ABI matching and semantic version comparison.
-            - **Pre-Bundled 60 Bedrock Touch Controls & Background Download Notification**: Eliminates `17/60` stall and keeps asset downloads running in the background with live progress notifications.
-            - **Self-Healing `.hmod` Validator & Two-Way Settings Sync**: Automatically repairs `.hmod` manifests and syncs Vulkan/OpenGL ES renderer, keypad, and `options.txt`.
+            ## What's New
+            - Google AI Studio AI Agent integration (Gemini API with local API-key storage using file permissions `0600` and model selection); shader-pack fixes for `horizon-shaders.toml` schema 1 (WGSL); Native Mods & Extras synchronization; a Store Favorite button layout fix; and an updated YouTube trailer player for trailers under five minutes without WebView blocking.
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt

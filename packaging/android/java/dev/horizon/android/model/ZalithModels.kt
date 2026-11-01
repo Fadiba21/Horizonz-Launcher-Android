@@ -281,6 +281,58 @@ data class SkinDetectionResult(
     val savedFileName: String = ""
 )
 
+
+enum class HorizonAiAgentProvider(val serdeKey: String, val label: String) {
+    GEMINI_API("gemini", "Google AI Studio (Gemini API)"),
+    LOCAL_SOCKET("local", "Local AI / Control Socket (horizon-control.json)")
+}
+
+data class GeminiModelOption(
+    val modelId: String,
+    val displayName: String,
+    val badge: String,
+    val description: String
+)
+
+val DEFAULT_GEMINI_MODELS = listOf(
+    GeminiModelOption(
+        modelId = "gemini-2.5-flash",
+        displayName = "Gemini 2.5 Flash (Recommended)",
+        badge = "FAST • AGENT",
+        description = "Fastest real-time in-game Minecraft AI Agent reasoning & action execution"
+    ),
+    GeminiModelOption(
+        modelId = "gemini-2.5-pro",
+        displayName = "Gemini 2.5 Pro",
+        badge = "PRO • DEEP PLAN",
+        description = "Advanced multi-step survival planning, building, and redstone logic"
+    ),
+    GeminiModelOption(
+        modelId = "gemini-2.5-flash-lite",
+        displayName = "Gemini 2.5 Flash-Lite",
+        badge = "LITE • LOW LATENCY",
+        description = "Ultra-lightweight model for instant chat & quick survival commands"
+    ),
+    GeminiModelOption(
+        modelId = "gemini-2.0-flash",
+        displayName = "Gemini 2.0 Flash",
+        badge = "STABLE",
+        description = "Balanced multimodal agent model via Google AI Studio API"
+    ),
+    GeminiModelOption(
+        modelId = "gemini-1.5-pro",
+        displayName = "Gemini 1.5 Pro",
+        badge = "LONG CONTEXT",
+        description = "Extended context window for long world session history"
+    ),
+    GeminiModelOption(
+        modelId = "gemini-1.5-flash",
+        displayName = "Gemini 1.5 Flash",
+        badge = "CLASSIC",
+        description = "Fast general-purpose Gemini model"
+    )
+)
+
 data class HorizonConfigState(
     val profile: Int = 0,
     val renderer: HorizonRendererMode = HorizonRendererMode.VULKAN_COMPAT,
@@ -328,7 +380,13 @@ data class HorizonConfigState(
     val backgroundMode: HorizonBackgroundMode = HorizonBackgroundMode.WALLPAPER,
     val useYoutubeTrailerWallpaper: Boolean = false,
     val muteTrailerVideo: Boolean = false,
-    val ramAllocationMb: Int = 0
+    val ramAllocationMb: Int = 0,
+    val aiAgentEnabled: Boolean = false,
+    val aiAgentProvider: HorizonAiAgentProvider = HorizonAiAgentProvider.GEMINI_API,
+    val geminiModel: String = "gemini-2.5-flash",
+    val aiAgentAutoAssistChat: Boolean = true,
+    val aiAgentAutonomousActions: Boolean = true,
+    val aiAgentTaskPrompt: String = "Bantu player di dalam game Minecraft 26.3, jawab chat/instruksi, dan jalankan aksi kontrol jika diminta."
 )
 
 val MINECRAFT_SPLASH_QUOTES = listOf(

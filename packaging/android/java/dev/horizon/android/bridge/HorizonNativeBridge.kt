@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "1.6"
+    const val INSTALLED_LAUNCHER_VERSION = "1.7"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -210,14 +210,24 @@ object HorizonNativeBridge {
 
     val OFFICIAL_MINECRAFT_TRAILERS_FALLBACK = listOf(
         MinecraftTrailerVideo(
-            videoId = "MmB9b5njVbA",
-            title = "Official Minecraft Trailer",
-            publishedDate = "Official"
-        ),
-        MinecraftTrailerVideo(
             videoId = "jLuJbSjo7NA",
             title = "The Copper Age | Official Minecraft Trailer",
             publishedDate = "2025-09-30"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "p3mPoyPOW5M",
+            title = "Spring to Life | Official Minecraft Trailer",
+            publishedDate = "2025-03-26"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "GsAbAj7sfmo",
+            title = "Minecraft: The Garden Awakens - Official Trailer",
+            publishedDate = "2024-12-04"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "TgGPrdGvdRU",
+            title = "Minecraft - Official Bundles of Bravery Trailer",
+            publishedDate = "2024-10-23"
         ),
         MinecraftTrailerVideo(
             videoId = "aPZ1S8sD2aE",
@@ -230,14 +240,9 @@ object HorizonNativeBridge {
             publishedDate = "2023-06-07"
         ),
         MinecraftTrailerVideo(
-            videoId = "UiPcEW_d9Io",
-            title = "Minecraft LIVE Official Trailer",
-            publishedDate = "2026-09-22"
-        ),
-        MinecraftTrailerVideo(
-            videoId = "wJO_vIDZn-I",
-            title = "Minecraft | Official Trailer",
-            publishedDate = "2024-11-19"
+            videoId = "MmB9b5njVbA",
+            title = "Official Minecraft Trailer",
+            publishedDate = "Official"
         )
     )
 
@@ -419,6 +424,52 @@ object HorizonNativeBridge {
             }
             if (discovered.isNotEmpty()) break
         }
+        // Also query YouTube InnerTube search for newest official @Minecraft trailers under 5 minutes
+        try {
+            val conn = (URL("https://www.youtube.com/youtubei/v1/search?prettyPrint=false").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 5500
+                readTimeout = 6500
+                setRequestProperty("Content-Type", "application/json")
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36")
+            }
+            val payload = JSONObject().apply {
+                put("query", "Minecraft Official Trailer @Minecraft")
+                put("params", "EgIQAQ%3D%3D") // Video filter
+                put(
+                    "context",
+                    JSONObject().put(
+                        "client",
+                        JSONObject().apply {
+                            put("clientName", "WEB")
+                            put("clientVersion", "2.20250326.01.00")
+                            put("hl", "en")
+                            put("gl", "US")
+                        }
+                    )
+                )
+            }.toString()
+            conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode == 200) {
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val rendererRegex = Regex("\"videoRenderer\":\\{\"videoId\":\"([a-zA-Z0-9_-]{11})\".*?\"title\":\\{\"runs\":\\[\\{\"text\":\"([^\"]+)\"\\}\\].*?\"lengthText\":\\{[^}]*\"simpleText\":\"(\\d+):(\\d+)\"\\}")
+                for (m in rendererRegex.findAll(body)) {
+                    val vid = m.groupValues[1]
+                    val title = m.groupValues[2]
+                    val mins = m.groupValues[3].toIntOrNull() ?: 99
+                    val secs = m.groupValues[4].toIntOrNull() ?: 0
+                    val totalSecs = mins * 60 + secs
+                    if (totalSecs in 20..299 && title.contains("trailer", ignoreCase = true) && title.contains("minecraft", ignoreCase = true)) {
+                        if (discovered.none { it.videoId == vid }) {
+                            discovered.add(MinecraftTrailerVideo(videoId = vid, title = title, publishedDate = "Latest"))
+                        }
+                    }
+                }
+            }
+        } catch (ignored: Exception) {
+        }
+
         for (fb in OFFICIAL_MINECRAFT_TRAILERS_FALLBACK) {
             if (discovered.none { it.videoId == fb.videoId }) {
                 discovered.add(fb)
@@ -1438,7 +1489,18 @@ object HorizonNativeBridge {
                     } ?: if (obj.optBoolean("useYoutubeTrailerWallpaper", false)) HorizonBackgroundMode.YOUTUBE_TRAILER else HorizonBackgroundMode.WALLPAPER,
                     useYoutubeTrailerWallpaper = obj.optBoolean("useYoutubeTrailerWallpaper", false),
                     muteTrailerVideo = obj.optBoolean("muteTrailerVideo", false),
-                    ramAllocationMb = obj.optInt("ram_allocation_mb", 0).coerceAtLeast(0)
+                    ramAllocationMb = obj.optInt("ram_allocation_mb", 0).coerceAtLeast(0),
+                    aiAgentEnabled = obj.optBoolean("aiAgentEnabled", false),
+                    aiAgentProvider = HorizonAiAgentProvider.entries.firstOrNull {
+                        it.serdeKey == obj.optString("aiAgentProvider", "gemini")
+                    } ?: HorizonAiAgentProvider.GEMINI_API,
+                    geminiModel = obj.optString("geminiModel", "gemini-2.5-flash").ifBlank { "gemini-2.5-flash" },
+                    aiAgentAutoAssistChat = obj.optBoolean("aiAgentAutoAssistChat", true),
+                    aiAgentAutonomousActions = obj.optBoolean("aiAgentAutonomousActions", true),
+                    aiAgentTaskPrompt = obj.optString(
+                        "aiAgentTaskPrompt",
+                        "Bantu player di dalam game Minecraft 26.3, jawab chat/instruksi, dan jalankan aksi kontrol jika diminta."
+                    )
                 )
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to read zalith-config.json: ${e.message}")
@@ -1539,6 +1601,12 @@ object HorizonNativeBridge {
             put("useYoutubeTrailerWallpaper", config.useYoutubeTrailerWallpaper)
             put("muteTrailerVideo", config.muteTrailerVideo)
             put("ram_allocation_mb", config.ramAllocationMb)
+            put("aiAgentEnabled", config.aiAgentEnabled)
+            put("aiAgentProvider", config.aiAgentProvider.serdeKey)
+            put("geminiModel", config.geminiModel)
+            put("aiAgentAutoAssistChat", config.aiAgentAutoAssistChat)
+            put("aiAgentAutonomousActions", config.aiAgentAutonomousActions)
+            put("aiAgentTaskPrompt", config.aiAgentTaskPrompt)
         }
         synchronized(configIoLock) {
             runCatching {
@@ -1648,6 +1716,17 @@ object HorizonNativeBridge {
                 linkedMapOf(
                     "ramAllocationMb" to config.ramAllocationMb.toString(),
                     "unlimited" to (config.ramAllocationMb <= 0).toString()
+                )
+            )
+            updateKeyValTxtNonDestructively(
+                File(dir, "horizon-agent.txt"),
+                linkedMapOf(
+                    "enabled" to config.aiAgentEnabled.toString(),
+                    "provider" to config.aiAgentProvider.serdeKey,
+                    "model" to config.geminiModel,
+                    "autoAssistChat" to config.aiAgentAutoAssistChat.toString(),
+                    "autonomousActions" to config.aiAgentAutonomousActions.toString(),
+                    "controlEndpoint" to File(dir, "horizon-control.json").absolutePath
                 )
             )
             updateOptionsTxtNonDestructively(File(dir, "options.txt"), config)
@@ -1868,8 +1947,30 @@ object HorizonNativeBridge {
                         updatedLines.add("$prefix$enabled")
                     }
                     hmodsTxt.writeText(updatedLines.joinToString("\n") + "\n")
+
+                    // Also sync built-in Horizon native extras in `horizon-extras.txt` so HUD/input mods always work!
+                    val extraUpdates = linkedMapOf<String, String>()
+                    when (modId) {
+                        "fps_overlay", "fps_counter" -> extraUpdates["fpsCounter"] = enabled.toString()
+                        "keystrokes" -> extraUpdates["keystrokes"] = enabled.toString()
+                        "zoom" -> extraUpdates["zoom"] = enabled.toString()
+                        "minimap" -> extraUpdates["minimap"] = enabled.toString()
+                        "coords_hud", "coordinates_hud" -> extraUpdates["coordsHud"] = enabled.toString()
+                        "mousetricks", "mouse_tweaks" -> {
+                            extraUpdates["mouseTweaks"] = enabled.toString()
+                            extraUpdates["mouseTweaksWheel"] = enabled.toString()
+                        }
+                        "fullbright" -> extraUpdates["fullbright"] = enabled.toString()
+                    }
+                    if (extraUpdates.isNotEmpty()) {
+                        updateKeyValTxtNonDestructively(File(dir, "horizon-extras.txt"), extraUpdates)
+                    }
                 }
                 "shaderpacks" -> {
+                    val shaderFile = File(File(dir, "shaderpacks"), fileName)
+                    if (shaderFile.exists()) {
+                        ensureValidHorizonShaderZip(shaderFile, fileName)
+                    }
                     val optFile = File(dir, "options.txt")
                     val lines = if (optFile.exists()) optFile.readLines().toMutableList() else mutableListOf()
                     val targetVal = if (enabled) fileName else ""
@@ -1882,6 +1983,15 @@ object HorizonNativeBridge {
                     }.toMutableList()
                     if (!found) out.add("shaderPack:$targetVal")
                     optFile.writeText(out.joinToString("\n") + "\n")
+
+                    updateKeyValTxtNonDestructively(
+                        File(dir, "horizon-shaders.txt"),
+                        linkedMapOf(
+                            "enabled" to enabled.toString(),
+                            "pack" to targetVal,
+                            "shaderPack" to targetVal
+                        )
+                    )
                 }
                 "resourcepacks" -> {
                     val optFile = File(dir, "options.txt")
@@ -2459,16 +2569,39 @@ object HorizonNativeBridge {
             }
         }
 
+        val defaultCapsForMod = when (cleanId) {
+            "fps_overlay", "keystrokes", "coords_hud", "minimap", "mod_menu" ->
+                if (hasWasmBinary) "[\"hud\", \"log\", \"game\", \"storage\"]" else "[\"registries\"]"
+            "zoom", "mousetricks", "vein_miner", "tree_chopper" ->
+                if (hasWasmBinary) "[\"hud\", \"log\", \"game\", \"storage\", \"command\"]" else "[\"registries\"]"
+            "recipes", "waypoints" ->
+                if (hasWasmBinary) "[\"hud\", \"log\", \"game\", \"storage\", \"chat\", \"command\"]" else "[\"registries\"]"
+            else -> "[\"registries\"]"
+        }
+
         val manifestBytes = existingEntries["horizon-mod.toml"]
+        var preservedManifestText: String? = null
         if (manifestBytes != null) {
             val manifestText = manifestBytes.toString(Charsets.UTF_8)
             val hasTopLevelId = Regex("(?m)^\\s*id\\s*=\\s*\"([a-z0-9_]{1,64})\"").containsMatchIn(manifestText)
             val hasSectionHeader = Regex("(?m)^\\s*\\[mod\\]").containsMatchIn(manifestText)
-            val hasRegistriesCap = manifestText.contains("\"registries\"")
+            val hasCapabilities = Regex("(?m)^\\s*capabilities\\s*=\\s*\\[").containsMatchIn(manifestText)
+            val wasStrippedByOldRepair = hasWasmBinary &&
+                manifestText.contains("capabilities = [\"registries\"]") &&
+                cleanId in setOf("fps_overlay", "keystrokes", "coords_hud", "minimap", "zoom", "recipes", "mod_menu", "mousetricks", "waypoints")
             val existingVer = Regex("(?m)^\\s*version\\s*=\\s*\"([^\"]+)\"").find(manifestText)?.groupValues?.get(1).orEmpty()
-            val versionMatches = !forceUpdateVersion && (fallbackVersion.isBlank() || existingVer == finalVersion)
-            if (hasTopLevelId && !hasSectionHeader && (hasWasmBinary || hasRegistriesCap) && versionMatches) {
-                hasValidManifest = true
+            val versionMatches = !forceUpdateVersion || fallbackVersion.isBlank() || existingVer == finalVersion
+
+            if (hasTopLevelId && !hasSectionHeader && hasCapabilities && !wasStrippedByOldRepair) {
+                if (versionMatches) {
+                    hasValidManifest = true
+                } else {
+                    // Only update `version = "..."` in-place while preserving 100% of original capabilities & experimental declarations!
+                    preservedManifestText = manifestText.replace(
+                        Regex("(?m)^(\\s*version\\s*=\\s*)\"[^\"]*\""),
+                        "$1\"$finalVersion\""
+                    )
+                }
             }
         }
 
@@ -2477,16 +2610,18 @@ object HorizonNativeBridge {
         }
 
         // Build or repair the `.hmod` ZIP archive with a compliant root `horizon-mod.toml`!
-        val validManifestToml = listOf(
+        val apiVer = if (hasWasmBinary) "0.1" else "0.2"
+        val sideVal = if (hasWasmBinary) "client" else "both"
+        val validManifestToml = preservedManifestText ?: (listOf(
             "id = \"$cleanId\"",
             "name = \"$finalTitle\"",
             "version = \"$finalVersion\"",
             "description = \"$finalSummary\"",
             "authors = [\"$finalAuthor\"]",
-            "api = \"0.2\"",
-            "side = \"both\"",
-            "capabilities = [\"registries\"]"
-        ).joinToString("\n") + "\n"
+            "api = \"$apiVer\"",
+            "side = \"$sideVal\"",
+            "capabilities = $defaultCapsForMod"
+        ).joinToString("\n") + "\n")
 
         existingEntries["horizon-mod.toml"] = validManifestToml.toByteArray(Charsets.UTF_8)
         if ("assets/$cleanId/lang/en_us.json" !in existingEntries) {
@@ -2518,6 +2653,195 @@ object HorizonNativeBridge {
      * - Repairs any `.hmod` missing EOCD or missing `horizon-mod.toml`.
      * - Enables newly discovered mods in `horizon-mods.txt` (`mod.<id>:true`) unless disabled in `hmod_list.json`.
      */
+
+    /**
+     * Validates and self-heals `.hshader` shader pack archives so they strictly conform to
+     * `horizon/docs/shaders.md` (`crates/horizon-shader-api`):
+     * - Root manifest MUST be named `horizon-shaders.toml` (plural, NEVER `horizon-shader.toml`!).
+     * - Top-level `schema = 1`, `id = "<snake_id>"`, `name = "..."`, `version = "..."`, `api = "0.1"`.
+     * - Stage tables `[sky] file = "sky.wgsl"` and `[[post]] file = "post.wgsl"`.
+     * - WGSL stage entrypoints MUST be `fn sky(input: SkyInput) -> vec4<f32>` and
+     *   `fn post(input: PostInput) -> vec4<f32>` without `@fragment` or `@group`/`@binding`!
+     */
+    fun ensureValidHorizonShaderZip(
+        targetFile: File,
+        fallbackId: String,
+        fallbackTitle: String = "",
+        fallbackVersion: String = "1.0.0",
+        fallbackSummary: String = "Horizon 26.3 WGSL Shader Pack"
+    ) {
+        val rawStem = fallbackId.removeSuffix(".hshader").removeSuffix(".zip")
+        val cleanId = sanitizeModId(rawStem).removeSuffix("_shader").ifBlank { "golden_hour" }
+        val extractedVer = Regex("-(\\d+\\.\\d+(?:\\.\\d+)?)").find(rawStem)?.groupValues?.get(1)
+        val finalVersion = extractedVer ?: fallbackVersion.ifBlank { "1.0.0" }
+        val finalTitle = fallbackTitle.ifBlank {
+            when {
+                cleanId.contains("golden_hour") -> "Golden Hour Shader"
+                cleanId.contains("glow") -> "Horizon Glow Shader"
+                else -> cleanId.split("_").joinToString(" ") { w -> w.replaceFirstChar { it.uppercaseChar() } }
+            }
+        }.replace("\"", "'")
+        val finalSummary = fallbackSummary.replace("\"", "'").replace("\n", " ")
+
+        val existingEntries = linkedMapOf<String, ByteArray>()
+        var isValidZip = false
+        if (targetFile.exists() && targetFile.length() > 22L) {
+            try {
+                ZipFile(targetFile).use { zf ->
+                    isValidZip = true
+                    val entries = zf.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        if (!entry.isDirectory) {
+                            existingEntries[entry.name] = zf.getInputStream(entry).use { it.readBytes() }
+                        }
+                    }
+                }
+            } catch (ignored: Exception) {
+                isValidZip = false
+                existingEntries.clear()
+            }
+        }
+
+        // Check if root `horizon-shaders.toml` exists and is valid schema = 1 without `@fragment` WGSL
+        val rootShadersToml = existingEntries["horizon-shaders.toml"]?.toString(Charsets.UTF_8)
+        val hasValidRootManifest = rootShadersToml != null &&
+            Regex("(?m)^\\s*schema\\s*=\\s*1\\b").containsMatchIn(rootShadersToml) &&
+            !Regex("(?m)^\\s*\\[shader\\]").containsMatchIn(rootShadersToml)
+        val hasInvalidFragmentAttr = existingEntries.entries.any { (k, v) ->
+            k.endsWith(".wgsl", true) && v.toString(Charsets.UTF_8).contains("@fragment")
+        }
+
+        if (isValidZip && hasValidRootManifest && !hasInvalidFragmentAttr) {
+            return
+        }
+
+        // Build compliant `horizon-shaders.toml` + `sky.wgsl` + `post.wgsl` per `docs/shaders.md` & `docs/api/shaders.md`!
+        val shadersManifest = listOf(
+            "schema = 1",
+            "id = \"$cleanId\"",
+            "name = \"$finalTitle\"",
+            "version = \"$finalVersion\"",
+            "api = \"0.1\"",
+            "description = \"$finalSummary\"",
+            "authors = [\"Horizon Shaders\"]",
+            "",
+            "[sky]",
+            "file = \"sky.wgsl\"",
+            "",
+            "[[post]]",
+            "file = \"post.wgsl\""
+        ).joinToString("\n") + "\n"
+
+        val isGlow = cleanId.contains("glow")
+        val skyWgsl = if (isGlow) {
+            listOf(
+                "// Horizon 26.3 WGSL Sky Stage — $finalTitle (schema = 1, api = 0.1)",
+                "fn sky(input: SkyInput) -> vec4<f32> {",
+                "    let up = clamp(input.ray_dir.y, 0.0, 1.0);",
+                "    let sun_dot = clamp(dot(normalize(input.ray_dir), normalize(frame.sun_direction)), 0.0, 1.0);",
+                "    let horizon_glow = pow(1.0 - up, 3.0) * vec3<f32>(0.18, 0.32, 0.52) * frame.sky_brightness;",
+                "    let sun_halo = pow(sun_dot, 8.0) * vec3<f32>(0.35, 0.28, 0.16) * frame.sky_brightness;",
+                "    let boosted = input.color.rgb + horizon_glow * 0.28 + sun_halo * 0.35;",
+                "    return vec4<f32>(clamp(boosted, vec3<f32>(0.0), vec3<f32>(1.0)), input.color.a);",
+                "}"
+            ).joinToString("\n") + "\n"
+        } else {
+            listOf(
+                "// Horizon 26.3 WGSL Sky Stage — $finalTitle (schema = 1, api = 0.1)",
+                "fn sky(input: SkyInput) -> vec4<f32> {",
+                "    let horizon = pow(1.0 - clamp(abs(input.ray_dir.y), 0.0, 1.0), 2.4);",
+                "    let sun_dot = clamp(dot(normalize(input.ray_dir), normalize(frame.sun_direction)), 0.0, 1.0);",
+                "    let warm_tint = vec3<f32>(1.0, 0.62, 0.32) * horizon * 0.26 * frame.sky_brightness;",
+                "    let sun_bloom = vec3<f32>(1.0, 0.78, 0.44) * pow(sun_dot, 6.0) * 0.32 * frame.sky_brightness;",
+                "    let sky_rgb = clamp(input.color.rgb * vec3<f32>(1.04, 0.96, 0.88) + warm_tint + sun_bloom, vec3<f32>(0.0), vec3<f32>(1.0));",
+                "    return vec4<f32>(sky_rgb, input.color.a);",
+                "}"
+            ).joinToString("\n") + "\n"
+        }
+
+        val postWgsl = if (isGlow) {
+            listOf(
+                "// Horizon 26.3 WGSL Post Stage — $finalTitle (schema = 1, api = 0.1)",
+                "fn post(input: PostInput) -> vec4<f32> {",
+                "    let base = input.color.rgb;",
+                "    let luma = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));",
+                "    let highlight = smoothstep(0.62, 1.0, luma);",
+                "    let vibrant = mix(vec3<f32>(luma), base, 1.16) + base * highlight * 0.14;",
+                "    return vec4<f32>(clamp(vibrant, vec3<f32>(0.0), vec3<f32>(1.0)), input.color.a);",
+                "}"
+            ).joinToString("\n") + "\n"
+        } else {
+            listOf(
+                "// Horizon 26.3 WGSL Post Stage — $finalTitle (schema = 1, api = 0.1)",
+                "fn post(input: PostInput) -> vec4<f32> {",
+                "    let base = input.color.rgb;",
+                "    let warm = base * vec3<f32>(1.06, 0.99, 0.91);",
+                "    let luma = dot(warm, vec3<f32>(0.2126, 0.7152, 0.0722));",
+                "    let graded = mix(vec3<f32>(luma), warm, 1.12);",
+                "    return vec4<f32>(clamp(graded, vec3<f32>(0.0), vec3<f32>(1.0)), input.color.a);",
+                "}"
+            ).joinToString("\n") + "\n"
+        }
+
+        val tmpZip = File(targetFile.parentFile, "${targetFile.name}.shader.tmp")
+        try {
+            ZipOutputStream(FileOutputStream(tmpZip)).use { zos ->
+                zos.putNextEntry(ZipEntry("horizon-shaders.toml"))
+                zos.write(shadersManifest.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+
+                zos.putNextEntry(ZipEntry("sky.wgsl"))
+                zos.write(skyWgsl.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+
+                zos.putNextEntry(ZipEntry("post.wgsl"))
+                zos.write(postWgsl.toByteArray(Charsets.UTF_8))
+                zos.closeEntry()
+            }
+            if (targetFile.exists()) targetFile.delete()
+            tmpZip.renameTo(targetFile)
+        } catch (e: Exception) {
+            tmpZip.delete()
+            Log.w(TAG, "Failed to repair .hshader archive ${targetFile.name}: ${e.message}")
+        }
+    }
+
+    /**
+     * Self-heals all `.hshader` files in `shaderpacks/` across `home` and `profileHome` so any
+     * existing pack (`golden_hour-0.1.0.hshader`, `glow-1.0.0.hshader`, etc.) that had singular
+     * `horizon-shader.toml` is automatically upgraded in-place to plural `horizon-shaders.toml` (`schema = 1`)!
+     */
+    fun syncAndRepairShadersStorage(context: Context, profileSlot: Int = 0) {
+        val home = ensureHomeDirectories(context)
+        val profileHome = getProfileHome(home, profileSlot)
+        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+            val shaderDir = File(base, "shaderpacks").apply { mkdirs() }
+            shaderDir.listFiles()?.forEach { f ->
+                if (f.isFile && (f.name.endsWith(".hshader", true) || f.name.endsWith(".zip", true))) {
+                    ensureValidHorizonShaderZip(
+                        targetFile = f,
+                        fallbackId = f.nameWithoutExtension
+                    )
+                }
+            }
+        }
+    }
+
+    fun getActiveShaderPackFileName(context: Context, profileSlot: Int = 0): String {
+        val home = ensureHomeDirectories(context)
+        val profileHome = getProfileHome(home, profileSlot)
+        val optFile = File(profileHome, "options.txt").takeIf { it.exists() } ?: File(home, "options.txt")
+        if (!optFile.exists()) return ""
+        return runCatching {
+            optFile.readLines()
+                .firstOrNull { it.startsWith("shaderPack:") }
+                ?.substringAfter("shaderPack:")
+                ?.trim()
+                .orEmpty()
+        }.getOrDefault("")
+    }
+
     fun syncAndRepairModsStorage(context: Context, profileSlot: Int = 0) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
@@ -2638,7 +2962,25 @@ object HorizonNativeBridge {
                 }
             }
             hmodsTxt.writeText(cleanedLines.joinToString("\n") + if (cleanedLines.isNotEmpty()) "\n" else "")
+
+            // Also sync built-in native HUD/input hooks in `horizon-extras.txt` for enabled official mods
+            val enabledSet = seenModIds.filter { it !in disabledIds }.toSet()
+            val extraSync = linkedMapOf<String, String>()
+            if ("fps_overlay" in seenModIds) extraSync["fpsCounter"] = ("fps_overlay" in enabledSet).toString()
+            if ("keystrokes" in seenModIds) extraSync["keystrokes"] = ("keystrokes" in enabledSet).toString()
+            if ("zoom" in seenModIds) extraSync["zoom"] = ("zoom" in enabledSet).toString()
+            if ("minimap" in seenModIds) extraSync["minimap"] = ("minimap" in enabledSet).toString()
+            if ("coords_hud" in seenModIds) extraSync["coordsHud"] = ("coords_hud" in enabledSet).toString()
+            if ("mousetricks" in seenModIds) {
+                val mt = ("mousetricks" in enabledSet).toString()
+                extraSync["mouseTweaks"] = mt
+                extraSync["mouseTweaksWheel"] = mt
+            }
+            if (extraSync.isNotEmpty()) {
+                updateKeyValTxtNonDestructively(File(base, "horizon-extras.txt"), extraSync)
+            }
         }
+        runCatching { syncAndRepairShadersStorage(context, profileSlot) }
     }
 
     /**
@@ -3352,15 +3694,15 @@ object HorizonNativeBridge {
             displayTags = listOf("NATIVE MOD", "Enchanting", "Tooltip", "26.3")
         ),
         StoreCatalogItem(
-            id = "golden_hour_shader",
-            slug = "golden_hour_shader",
+            id = "golden_hour",
+            slug = "golden_hour",
             title = "Golden Hour Shader",
             summary = "Warm volumetric sunset rays, water reflections, and atmospheric sky grading for Horizon 26.3 WGSL.",
             author = "Horizon Shaders",
-            version = "1.1.0",
+            version = "0.1.0",
             supportedMcVersions = listOf("26.3"),
-            downloadUrl = "horizon-builtin://shader/golden_hour_shader",
-            fileName = "golden_hour_shader-1.1.0.hshader",
+            downloadUrl = "horizon-builtin://shader/golden_hour",
+            fileName = "golden_hour-0.1.0.hshader",
             sizeBytes = 53248L,
             category = StoreCategory.SHADER_PACK,
             kindBadge = "SHADER PACK",
@@ -3765,31 +4107,13 @@ object HorizonNativeBridge {
     private fun writeBuiltInHorizonArtifact(targetFile: File, item: StoreCatalogItem) {
         when (item.category) {
             StoreCategory.SHADER_PACK -> {
-                ZipOutputStream(FileOutputStream(targetFile)).use { zos ->
-                    val manifest = listOf(
-                        "[shader]",
-                        "id = \"${sanitizeModId(item.id)}\"",
-                        "name = \"${item.title.replace("\"", "'")}\"",
-                        "version = \"${item.version}\"",
-                        "api = \"0.1\"",
-                        "game = \"26.3\"",
-                        "description = \"${item.summary.replace("\"", "'")}\""
-                    ).joinToString("\n").toByteArray(Charsets.UTF_8)
-                    zos.putNextEntry(ZipEntry("horizon-shader.toml"))
-                    zos.write(manifest)
-                    zos.closeEntry()
-
-                    val skyWgsl = listOf(
-                        "// Horizon 26.3 WGSL Sky & Post Stage (${item.title})",
-                        "@fragment",
-                        "fn fs_main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {",
-                        "    return vec4<f32>(uv.x, uv.y, 0.85, 1.0);",
-                        "}"
-                    ).joinToString("\n").toByteArray(Charsets.UTF_8)
-                    zos.putNextEntry(ZipEntry("shaders/post.wgsl"))
-                    zos.write(skyWgsl)
-                    zos.closeEntry()
-                }
+                ensureValidHorizonShaderZip(
+                    targetFile = targetFile,
+                    fallbackId = item.id,
+                    fallbackTitle = item.title,
+                    fallbackVersion = item.version,
+                    fallbackSummary = item.summary
+                )
             }
             StoreCategory.RESOURCE_PACK -> {
                 ZipOutputStream(FileOutputStream(targetFile)).use { zos ->
@@ -4035,8 +4359,14 @@ object HorizonNativeBridge {
                     return@Thread
                 }
 
-                // If it's a Mod or Native Mod, validate/repair the `.hmod` ZIP and stamp the exact installed version!
+                // If it's a Mod or Native Mod, preserve `.hnmod` in `horizon-native-mods/` if applicable and validate `.hmod`!
                 if (item.category == StoreCategory.MOD || item.category == StoreCategory.NATIVE_MOD) {
+                    if (actualUrl.endsWith(".hnmod", ignoreCase = true) || item.category == StoreCategory.NATIVE_MOD) {
+                        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+                            val nativeDir = File(base, "horizon-native-mods").apply { mkdirs() }
+                            runCatching { partFile.copyTo(File(nativeDir, "$cleanId.hnmod"), overwrite = true) }
+                        }
+                    }
                     ensureValidHorizonModZip(
                         targetFile = partFile,
                         fallbackId = cleanId,
@@ -4045,6 +4375,14 @@ object HorizonNativeBridge {
                         fallbackSummary = item.summary,
                         fallbackAuthor = item.author,
                         forceUpdateVersion = true
+                    )
+                } else if (item.category == StoreCategory.SHADER_PACK) {
+                    ensureValidHorizonShaderZip(
+                        targetFile = partFile,
+                        fallbackId = cleanId,
+                        fallbackTitle = item.title,
+                        fallbackVersion = item.version,
+                        fallbackSummary = item.summary
                     )
                 }
 
@@ -4207,7 +4545,7 @@ object HorizonNativeBridge {
                             if (stripped.isNotBlank()) desc = stripped
                         }
                     } else {
-                        val shaderEntry = zf.getEntry("horizon-shader.toml")
+                        val shaderEntry = zf.getEntry("horizon-shaders.toml") ?: zf.getEntry("horizon-shader.toml")
                         if (shaderEntry != null) {
                             val txt = zf.getInputStream(shaderEntry).bufferedReader().use { it.readText() }
                             Regex("(?m)^\\s*description\\s*=\\s*\"([^\"]+)\"").find(txt)?.groupValues?.get(1)?.let { desc = it }
@@ -4601,6 +4939,7 @@ object HorizonNativeBridge {
         File(home, "zalith-game-exited.flag").delete()
         File(home, "zalith-game-boot.txt").writeText("12|Preparing Profile, Mods & Skin...")
         runCatching { syncAndRepairModsStorage(context, config.profile) }
+        runCatching { syncAndRepairShadersStorage(context, config.profile) }
         File(home, "zalith-game-boot.txt").writeText("22|Syncing Engine Config & options.txt...")
         runCatching { saveConfig(context, config, activeAccount) }
 
@@ -4624,6 +4963,167 @@ object HorizonNativeBridge {
         )
     }
 
+    // ========================================================================
+    // GOOGLE AI STUDIO (GEMINI API) LOCAL-ONLY KEY STORAGE & AGENT INTEGRATION
+    // ========================================================================
+
+    private fun getGeminiSecretFile(context: Context): File {
+        return File(ensureHomeDirectories(context), "horizon-gemini-secret.json")
+    }
+
+    /**
+     * Saves the user's Google AI Studio (Gemini) API Key strictly locally on the device
+     * with owner-only file permissions (`0600`). Never written to logs or public config files.
+     */
+    fun saveGeminiApiKeyLocal(context: Context, apiKey: String) {
+        try {
+            val file = getGeminiSecretFile(context)
+            val cleanKey = apiKey.trim()
+            val obj = JSONObject().apply {
+                put("gemini_api_key", cleanKey)
+                put("updated_at", System.currentTimeMillis())
+                put("storage_scope", "local_device_only")
+            }
+            file.writeText(obj.toString(2))
+            runCatching {
+                file.setReadable(false, false)
+                file.setReadable(true, true)
+                file.setWritable(false, false)
+                file.setWritable(true, true)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to save local Gemini API key: ${e.message}")
+        }
+    }
+
+    fun loadGeminiApiKeyLocal(context: Context): String {
+        return try {
+            val file = getGeminiSecretFile(context)
+            if (!file.exists()) return ""
+            val obj = JSONObject(file.readText())
+            obj.optString("gemini_api_key", "").trim()
+        } catch (e: Exception) {
+            ""
+        }
+    }
+
+    fun clearGeminiApiKeyLocal(context: Context) {
+        runCatching { getGeminiSecretFile(context).delete() }
+    }
+
+    /**
+     * Fetches available `generateContent`-capable models from Google AI Studio (`v1beta/models`)
+     * using the locally stored API key, merging them with `DEFAULT_GEMINI_MODELS`.
+     */
+    fun fetchAvailableGeminiModels(context: Context, apiKeyOverride: String = ""): List<GeminiModelOption> {
+        val key = apiKeyOverride.trim().ifBlank { loadGeminiApiKeyLocal(context) }
+        val merged = LinkedHashMap<String, GeminiModelOption>()
+        DEFAULT_GEMINI_MODELS.forEach { merged[it.modelId] = it }
+        if (key.isBlank()) return merged.values.toList()
+
+        try {
+            val conn = (URL("https://generativelanguage.googleapis.com/v1beta/models?key=$key").openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = 7000
+                readTimeout = 8000
+                setRequestProperty("Accept", "application/json")
+            }
+            if (conn.responseCode in 200..299) {
+                val body = conn.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(body)
+                val modelsArr = root.optJSONArray("models") ?: JSONArray()
+                for (i in 0 until modelsArr.length()) {
+                    val m = modelsArr.optJSONObject(i) ?: continue
+                    val rawName = m.optString("name", "").removePrefix("models/").trim()
+                    if (!rawName.startsWith("gemini", ignoreCase = true)) continue
+                    val methods = m.optJSONArray("supportedGenerationMethods")
+                    var supportsGen = false
+                    if (methods != null) {
+                        for (j in 0 until methods.length()) {
+                            if (methods.optString(j) == "generateContent") {
+                                supportsGen = true
+                                break
+                            }
+                        }
+                    }
+                    if (!supportsGen) continue
+                    val disp = m.optString("displayName", rawName)
+                    val desc = m.optString("description", "Google AI Studio Gemini model ($rawName)").take(120)
+                    if (rawName !in merged) {
+                        merged[rawName] = GeminiModelOption(
+                            modelId = rawName,
+                            displayName = "$disp ($rawName)",
+                            badge = "AI STUDIO LIVE",
+                            description = desc
+                        )
+                    }
+                }
+            }
+        } catch (ignored: Exception) {
+        }
+        return merged.values.toList()
+    }
+
+    /**
+     * Tests the Google AI Studio (Gemini API) connection and returns `(success, responseMessage)`.
+     */
+    fun testGeminiApiConnection(
+        context: Context,
+        apiKeyOverride: String = "",
+        modelId: String = "gemini-2.5-flash",
+        prompt: String = "Kamu adalah AI Agent di dalam Minecraft 26.3 (HorizonZ Launcher). Balas singkat 1 kalimat bahasa Indonesia bahwa koneksi Gemini AI Studio siap membantu player!"
+    ): Pair<Boolean, String> {
+        val key = apiKeyOverride.trim().ifBlank { loadGeminiApiKeyLocal(context) }
+        if (key.isBlank()) {
+            return false to "API Key Google AI Studio masih kosong. Silakan tempel API Key terlebih dahulu."
+        }
+        val cleanModel = modelId.removePrefix("models/").trim().ifBlank { "gemini-2.5-flash" }
+        return try {
+            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent?key=$key"
+            val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 9000
+                readTimeout = 12000
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
+            val reqJson = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().put(
+                            "parts",
+                            JSONArray().put(JSONObject().put("text", prompt))
+                        )
+                    )
+                )
+            }.toString()
+            conn.outputStream.use { it.write(reqJson.toByteArray(Charsets.UTF_8)) }
+            val code = conn.responseCode
+            if (code in 200..299) {
+                val resp = conn.inputStream.bufferedReader().use { it.readText() }
+                val root = JSONObject(resp)
+                val reply = root.optJSONArray("candidates")
+                    ?.optJSONObject(0)
+                    ?.optJSONObject("content")
+                    ?.optJSONArray("parts")
+                    ?.optJSONObject(0)
+                    ?.optString("text", "")
+                    ?.trim()
+                    .orEmpty()
+                true to "Terhubung ke Google AI Studio ($cleanModel):\n\"${reply.ifBlank { "OK (200)" }}\""
+            } else {
+                val errTxt = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty() }.getOrDefault("")
+                val errMsg = runCatching {
+                    JSONObject(errTxt).optJSONObject("error")?.optString("message", errTxt.take(180)) ?: errTxt.take(180)
+                }.getOrDefault("HTTP $code")
+                false to "Gagal menghubungi Gemini API ($cleanModel): $errMsg"
+            }
+        } catch (e: Exception) {
+            false to "Koneksi error: ${e.message}"
+        }
+    }
+
     fun startHorizonGameActivity(
         context: Context,
         config: HorizonConfigState,
@@ -4637,6 +5137,8 @@ object HorizonNativeBridge {
         lastGameLaunchTimestampMs.set(now)
 
         val totalRamMb = getDeviceTotalRamMb(context)
+        val activeShaderPack = getActiveShaderPackFileName(context, config.profile)
+        val hasGeminiKey = loadGeminiApiKeyLocal(context).isNotBlank()
         val intent = Intent(context, HorizonActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             putExtra("HORIZON_ANDROID_PUBLIC", config.publicOnDeviceAssetDownload)
@@ -4647,6 +5149,14 @@ object HorizonNativeBridge {
             putExtra("HORIZON_WGPU_BACKEND", if (config.renderer == HorizonRendererMode.OPENGL) "gl" else "vulkan")
             putExtra("HORIZON_RAM_ALLOCATION_MB", config.ramAllocationMb)
             putExtra("HORIZON_DEVICE_TOTAL_RAM_MB", totalRamMb)
+            putExtra("HORIZON_SHADER_PACK", activeShaderPack)
+            putExtra("HORIZON_AI_AGENT_ENABLED", config.aiAgentEnabled)
+            putExtra("HORIZON_AI_AGENT_PROVIDER", config.aiAgentProvider.serdeKey)
+            putExtra("HORIZON_GEMINI_MODEL", config.geminiModel)
+            putExtra("HORIZON_GEMINI_HAS_KEY", hasGeminiKey)
+            putExtra("HORIZON_AI_AGENT_AUTO_CHAT", config.aiAgentAutoAssistChat)
+            putExtra("HORIZON_AI_AGENT_AUTONOMOUS", config.aiAgentAutonomousActions)
+            putExtra("HORIZON_AI_AGENT_TASK", config.aiAgentTaskPrompt)
         }
         context.startActivity(intent)
     }

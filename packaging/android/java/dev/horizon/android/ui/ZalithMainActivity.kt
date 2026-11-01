@@ -12,7 +12,9 @@ import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -214,6 +216,7 @@ private fun SyncDynamicLauncherPalette(palette: ZalithThemePalette, useDynamicCo
 enum class SettingsSubCategory(val label: String, val icon: ImageVector) {
     RENDERER("Renderer", Icons.Default.DisplaySettings),
     GAME("Game", Icons.Default.RocketLaunch),
+    AI_AGENT("AI Agent", Icons.Default.AutoAwesome),
     CONTROLS("Controls", Icons.Default.Games),
     GAMEPAD("Gamepad", Icons.Default.SportsEsports),
     LAUNCHER("Launcher", Icons.Default.ViewInAr)
@@ -235,6 +238,7 @@ class ZalithMainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         HorizonNativeBridge.ensureHomeDirectories(this)
         HorizonNativeBridge.syncAndRepairModsStorage(this, 0)
+        HorizonNativeBridge.syncAndRepairShadersStorage(this, 0)
 
         if (Build.VERSION.SDK_INT >= 33) {
             try {
@@ -1421,6 +1425,9 @@ fun LavenderTagBadge(text: String) {
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
             color = LavenderBadgeText,
+            maxLines = 1,
+            softWrap = false,
+            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
         )
     }
@@ -1970,6 +1977,31 @@ private fun ZalithIconRail(
  * - 18 Authentic HD 16:9 Minecraft Wallpapers cycling every 5 seconds with smooth crossfade.
  * - Zero duplicate navigation buttons on top-right (only a single clean `Wallpaper` button).
  */
+private class HorizonZVideoJsBridge(
+    private val mainHandler: android.os.Handler,
+    private val onVideoEndedCallback: () -> Unit
+) {
+    private val triggered = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    fun resetTrigger() {
+        triggered.set(false)
+    }
+
+    @JavascriptInterface
+    fun onEnded() {
+        if (triggered.compareAndSet(false, true)) {
+            mainHandler.post { onVideoEndedCallback() }
+        }
+    }
+
+    @JavascriptInterface
+    fun onError() {
+        if (triggered.compareAndSet(false, true)) {
+            mainHandler.post { onVideoEndedCallback() }
+        }
+    }
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 private fun MinecraftTrailerVideoWallpaperPlayer(
@@ -1982,133 +2014,238 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
     modifier: Modifier = Modifier
 ) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
-
-    val buildControllerJs = remember(videoId) {
-        { mutedFlag: Boolean, pausedFlag: Boolean ->
-            val mStr = if (mutedFlag) "true" else "false"
-            val pStr = if (pausedFlag) "true" else "false"
-            """
-            (function() {
-              window.__hzMuted = $mStr;
-              window.__hzPaused = $pStr;
-              if (!document.getElementById('__hz_style')) {
-                var st = document.createElement('style');
-                st.id = '__hz_style';
-                st.innerHTML = 'html, body { margin:0 !important; padding:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; overflow:hidden !important; } ' +
-                  '.ytp-chrome-top, .ytp-chrome-bottom, .ytp-watermark, .ytp-pause-overlay, .ytp-gradient-top, .ytp-gradient-bottom, .ytp-show-cards-title, .ytp-endscreen-content, .ytp-ce-element, .ytp-PaidContentOverlay, .iv-branding, ytm-mobile-topbar-renderer, ytm-slim-video-metadata-section-renderer, ytm-item-section-renderer, ytm-pivot-bar-renderer, ytm-companion-ad-renderer, .player-controls-content { display:none !important; opacity:0 !important; pointer-events:none !important; } ' +
-                  '.ytp-caption-window-container, .caption-window, .ytp-caption-segment, ytm-caption-track { display:none !important; opacity:0 !important; visibility:hidden !important; } ' + '.html5-video-player, #player, #player-container-id, .html5-video-container { position:fixed !important; inset:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; z-index:2147483646 !important; } ' +
-                  'video.html5-main-video, video { position:fixed !important; top:-4% !important; left:-4% !important; width:108vw !important; height:108vh !important; object-fit:cover !important; background:#000 !important; z-index:2147483647 !important; pointer-events:none !important; }';
-                if (document.head) document.head.appendChild(st);
-              }
-              if (!window.__hzTimer) {
-                window.__hzFallbackTried = false;
-                window.__hzTimer = setInterval(function() {
-                  try {
-                    var errEl = document.querySelector('.ytp-error, .ytp-error-content-wrap');
-                    if (errEl && errEl.offsetWidth > 0 && !window.__hzFallbackTried && location.pathname.indexOf('/embed/') === 0) {
-                      window.__hzFallbackTried = true;
-                      window.location.href = 'horizonz://watch-fallback';
-                      return;
-                    }
-                    var mp = document.getElementById('movie_player');
-                    if (mp && mp.setPlaybackQualityRange) {
-                      try { mp.setPlaybackQualityRange('hd720', 'hd720'); } catch(e) {}
-                    }
-                    var v = document.querySelector('video');
-                    if (v) {
-                      v.muted = !!window.__hzMuted;
-                      if (v.textTracks) {
-                        for (var tIdx = 0; tIdx < v.textTracks.length; tIdx++) {
-                          v.textTracks[tIdx].mode = 'disabled';
-                        }
-                      }
-                      if (mp && mp.unloadModule) { try { mp.unloadModule('captions'); } catch(e) {} }
-                      if (mp && mp.setOption) { try { mp.setOption('captions', 'track', {}); } catch(e) {} }
-                      if (!window.__hzMuted) { v.volume = 1.0; }
-                      v.setAttribute('playsinline', 'true');
-                      v.setAttribute('webkit-playsinline', 'true');
-                      if (!v.__hzHooked) {
-                        v.__hzHooked = true;
-                        v.addEventListener('ended', function() {
-                          window.location.href = 'horizonz://trailer-ended';
-                        });
-                      }
-                      if (window.__hzPaused) {
-                        if (!v.paused) v.pause();
-                      } else if (v.paused) {
-                        var playBtn = document.querySelector('.ytp-large-play-button, button.ytp-play-button');
-                        if (playBtn) { try { playBtn.click(); } catch(e) {} }
-                        var pr = v.play();
-                        if (pr && pr.catch) {
-                          pr.catch(function() {
-                            v.muted = true;
-                            v.play().catch(function(){});
-                          });
-                        }
-                      }
-                    } else {
-                      var lpb = document.querySelector('.ytp-large-play-button');
-                      if (lpb && !window.__hzPaused) { try { lpb.click(); } catch(e) {} }
-                    }
-                  } catch (e) {}
-                }, 350);
-              }
-            })();
-            """.trimIndent()
-        }
+    val currentOnEnded by rememberUpdatedState(onVideoEndedOrError)
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
+    val jsBridge = remember {
+        HorizonZVideoJsBridge(mainHandler) { currentOnEnded() }
     }
 
-    val loadTrailerIntoWebView = remember {
-        { wv: WebView, vid: String, streamUrl: String, muted: Boolean, useMobileWatch: Boolean ->
-            val muteParam = if (muted) 1 else 0
-            if (streamUrl.startsWith("http") && !useMobileWatch) {
-                val safeStream = streamUrl.replace("'", "\'")
-                val directHtml = """
-                    <!DOCTYPE html>
-                    <html>
-                    <head>
-                    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-                    <style>
-                      html, body { margin:0; padding:0; width:100%; height:100%; background:#000; overflow:hidden; }
-                      video { position:fixed; top:-4%; left:-4%; width:108%; height:108%; object-fit:cover; background:#000; }
-                    </style>
-                    </head>
-                    <body>
-                      <video id="v" src='$safeStream' autoplay playsinline></video>
-                      <script>
-                        window.__hzMuted = ${if (muted) "true" else "false"};
-                        window.__hzPaused = false;
-                        var v = document.getElementById('v');
-                        v.muted = window.__hzMuted;
-                        v.volume = 1.0;
-                        v.onended = function() { window.location.href = 'horizonz://trailer-ended'; };
-                        v.onerror = function() { window.location.href = 'horizonz://embed-fallback'; };
-                        var p = v.play();
-                        if (p && p.catch) { p.catch(function() { v.muted = true; v.play(); }); }
-                      </script>
-                    </body>
-                    </html>
-                """.trimIndent()
-                wv.loadDataWithBaseURL("https://www.minecraft.net/", directHtml, "text/html", "utf-8", null)
-            } else if (useMobileWatch) {
-                val watchUrl = "https://m.youtube.com/watch?v=$vid&autoplay=1&mute=$muteParam&playsinline=1&cc_load_policy=0"
-                wv.loadUrl(
-                    watchUrl,
-                    mapOf(
-                        "Referer" to "https://www.minecraft.net/",
-                        "Origin" to "https://www.minecraft.net"
-                    )
-                )
-            } else {
-                val embedUrl = "https://www.youtube.com/embed/$vid?autoplay=1&mute=$muteParam&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&cc_load_policy=0&cc_lang_pref=none&fs=0&playsinline=1&enablejsapi=1&loop=1&playlist=$vid&vq=hd720&origin=https://www.minecraft.net"
-                wv.loadUrl(
-                    embedUrl,
-                    mapOf(
-                        "Referer" to "https://www.minecraft.net/",
-                        "Origin" to "https://www.minecraft.net"
-                    )
-                )
-            }
+    val buildUnifiedPlayerHtml = remember {
+        { vid: String, initialStreamUrl: String, muted: Boolean ->
+            val mBool = if (muted) "true" else "false"
+            val safeStream = initialStreamUrl.replace("'", "\'")
+            """
+            <!DOCTYPE html>
+            <html>
+            <head>
+            <meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+            <meta name="referrer" content="origin">
+            <style>
+              * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; -webkit-user-select: none; }
+              html, body { width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+              #stage { position: fixed; inset: 0; width: 100vw; height: 100vh; background: #000; overflow: hidden; }
+              #ytframe {
+                position: absolute;
+                top: -12%;
+                left: -12%;
+                width: 124vw;
+                height: 124vh;
+                border: 0;
+                background: #000;
+                pointer-events: none;
+                z-index: 1;
+              }
+              #directVid {
+                position: absolute;
+                top: -4%;
+                left: -4%;
+                width: 108vw;
+                height: 108vh;
+                object-fit: cover;
+                background: #000;
+                pointer-events: none;
+                z-index: 2;
+                display: none;
+              }
+            </style>
+            </head>
+            <body>
+              <div id="stage">
+                <iframe
+                  id="ytframe"
+                  src="https://www.youtube-nocookie.com/embed/$vid?enablejsapi=1&autoplay=1&mute=1&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&cc_load_policy=0&cc_lang_pref=none&fs=0&playsinline=1&vq=hd720&origin=https://www.minecraft.net"
+                  allow="autoplay; encrypted-media; picture-in-picture"
+                  referrerpolicy="origin">
+                </iframe>
+                <video id="directVid" playsinline webkit-playsinline autoplay muted preload="auto"></video>
+              </div>
+              <script>
+                window.__hzMuted = $mBool;
+                window.__hzPaused = false;
+                window.__hzDirectActive = false;
+                window.__hzEndedSent = false;
+
+                function notifyEnded() {
+                  if (window.__hzEndedSent) return;
+                  window.__hzEndedSent = true;
+                  try {
+                    if (window.HorizonZBridge && window.HorizonZBridge.onEnded) {
+                      window.HorizonZBridge.onEnded();
+                      return;
+                    }
+                  } catch (e) {}
+                  window.location.href = 'https://www.minecraft.net/__hz_ended';
+                }
+
+                function ytCmd(func, args) {
+                  try {
+                    var f = document.getElementById('ytframe');
+                    if (f && f.contentWindow) {
+                      f.contentWindow.postMessage(JSON.stringify({
+                        event: 'command',
+                        func: func,
+                        args: args || []
+                      }), '*');
+                    }
+                  } catch (e) {}
+                }
+
+                function syncAudioState() {
+                  var dv = document.getElementById('directVid');
+                  if (window.__hzDirectActive && dv) {
+                    dv.muted = !!window.__hzMuted;
+                    if (!window.__hzMuted) dv.volume = 1.0;
+                    ytCmd('mute', []);
+                    ytCmd('pauseVideo', []);
+                  } else {
+                    if (window.__hzMuted) {
+                      ytCmd('mute', []);
+                    } else {
+                      ytCmd('unMute', []);
+                      ytCmd('setVolume', [100]);
+                    }
+                  }
+                }
+
+                window.__hzSetMuted = function(m) {
+                  window.__hzMuted = !!m;
+                  syncAudioState();
+                };
+
+                window.__hzSetPaused = function(p) {
+                  window.__hzPaused = !!p;
+                  var dv = document.getElementById('directVid');
+                  if (window.__hzPaused) {
+                    if (dv && !dv.paused) dv.pause();
+                    ytCmd('pauseVideo', []);
+                  } else {
+                    if (window.__hzDirectActive && dv) {
+                      dv.play().catch(function(){});
+                    } else {
+                      ytCmd('playVideo', []);
+                      syncAudioState();
+                    }
+                  }
+                };
+
+                window.__hzAttachDirectStream = function(streamUrl) {
+                  if (!streamUrl || streamUrl.indexOf('http') !== 0 || window.__hzDirectActive) return;
+                  var dv = document.getElementById('directVid');
+                  if (!dv) return;
+                  dv.src = streamUrl;
+                  dv.muted = true;
+                  dv.onplaying = function() {
+                    window.__hzDirectActive = true;
+                    dv.style.display = 'block';
+                    dv.muted = !!window.__hzMuted;
+                    if (!window.__hzMuted) dv.volume = 1.0;
+                    ytCmd('pauseVideo', []);
+                  };
+                  dv.ontimeupdate = function() {
+                    if (dv.currentTime >= 298) {
+                      notifyEnded();
+                    }
+                  };
+                  dv.onended = function() {
+                    notifyEnded();
+                  };
+                  dv.onerror = function() {
+                    window.__hzDirectActive = false;
+                    dv.style.display = 'none';
+                    ytCmd('playVideo', []);
+                    syncAudioState();
+                  };
+                  var p = dv.play();
+                  if (p && p.catch) {
+                    p.catch(function() {
+                      dv.muted = true;
+                      dv.play().catch(function() {
+                        window.__hzDirectActive = false;
+                        dv.style.display = 'none';
+                      });
+                    });
+                  }
+                };
+
+                window.addEventListener('message', function(ev) {
+                  try {
+                    var data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+                    if (!data) return;
+                    if (data.event === 'onReady') {
+                      ytCmd('unloadModule', ['captions']);
+                      ytCmd('unloadModule', ['cc']);
+                      ytCmd('setPlaybackQualityRange', ['hd720', 'hd720']);
+                      if (!window.__hzPaused && !window.__hzDirectActive) {
+                        ytCmd('playVideo', []);
+                        syncAudioState();
+                      }
+                    } else if (data.event === 'infoDelivery' && data.info) {
+                      if (data.info.playerState === 1) {
+                        ytCmd('unloadModule', ['captions']);
+                        ytCmd('unloadModule', ['cc']);
+                        ytCmd('setPlaybackQualityRange', ['hd720', 'hd720']);
+                        syncAudioState();
+                      } else if (data.info.playerState === 0) {
+                        notifyEnded();
+                      }
+                      if (typeof data.info.currentTime === 'number' && data.info.currentTime >= 298) {
+                        notifyEnded();
+                      }
+                    } else if (data.event === 'onError') {
+                      if (!window.__hzDirectActive) {
+                        notifyEnded();
+                      }
+                    }
+                  } catch (e) {}
+                });
+
+                var f = document.getElementById('ytframe');
+                f.addEventListener('load', function() {
+                  try {
+                    f.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*');
+                  } catch (e) {}
+                  setTimeout(function() {
+                    ytCmd('unloadModule', ['captions']);
+                    ytCmd('unloadModule', ['cc']);
+                    ytCmd('setPlaybackQualityRange', ['hd720', 'hd720']);
+                    if (!window.__hzDirectActive && !window.__hzPaused) {
+                      ytCmd('playVideo', []);
+                      syncAudioState();
+                    }
+                  }, 350);
+                });
+
+                setInterval(function() {
+                  try {
+                    if (f && f.contentWindow) {
+                      f.contentWindow.postMessage(JSON.stringify({ event: 'listening', id: 1, channel: 'widget' }), '*');
+                    }
+                    if (!window.__hzDirectActive && !window.__hzPaused) {
+                      ytCmd('unloadModule', ['captions']);
+                      ytCmd('unloadModule', ['cc']);
+                      syncAudioState();
+                    }
+                  } catch (e) {}
+                }, 1200);
+
+                if ('$safeStream'.indexOf('http') === 0) {
+                  window.__hzAttachDirectStream('$safeStream');
+                }
+              </script>
+            </body>
+            </html>
+            """.trimIndent()
         }
     }
 
@@ -2128,10 +2265,20 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
         }
     }
 
+    LaunchedEffect(directStreamUrl, webViewRef) {
+        if (directStreamUrl.startsWith("http")) {
+            val safe = directStreamUrl.replace("'", "\'")
+            webViewRef?.evaluateJavascript(
+                "if (window.__hzAttachDirectStream) window.__hzAttachDirectStream('$safe');",
+                null
+            )
+        }
+    }
+
     LaunchedEffect(isMuted, webViewRef) {
         val mStr = if (isMuted) "true" else "false"
         webViewRef?.evaluateJavascript(
-            "(function(){ window.__hzMuted = $mStr; var v = document.querySelector('video'); if (v) { v.muted = $mStr; if (!$mStr) { v.volume = 1.0; v.play().catch(function(){}); } } })();",
+            "if (window.__hzSetMuted) window.__hzSetMuted($mStr);",
             null
         )
     }
@@ -2139,13 +2286,13 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
     LaunchedEffect(isPaused, webViewRef) {
         webViewRef?.let { wv ->
             if (isPaused) {
-                wv.evaluateJavascript("(function(){ window.__hzPaused = true; var v = document.querySelector('video'); if(v) v.pause(); })();", null)
+                wv.evaluateJavascript("if (window.__hzSetPaused) window.__hzSetPaused(true);", null)
                 wv.onPause()
                 wv.pauseTimers()
             } else {
                 wv.onResume()
                 wv.resumeTimers()
-                wv.evaluateJavascript("(function(){ window.__hzPaused = false; var v = document.querySelector('video'); if(v) v.play().catch(function(){}); })();", null)
+                wv.evaluateJavascript("if (window.__hzSetPaused) window.__hzSetPaused(false);", null)
             }
         }
     }
@@ -2178,45 +2325,55 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
                     userAgentString = "Mozilla/5.0 (Linux; Android 14; Pixel 8 Pro) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.6478.122 Mobile Safari/537.36"
                 }
+                addJavascriptInterface(jsBridge, "HorizonZBridge")
                 webChromeClient = WebChromeClient()
                 webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                        if (url == null || view == null) return false
-                        when {
-                            url.startsWith("horizonz://trailer-ended") || url.startsWith("horizonz://trailer-error") -> {
-                                onVideoEndedOrError()
-                                return true
-                            }
-                            url.startsWith("horizonz://embed-fallback") -> {
-                                loadTrailerIntoWebView(view, videoId, "", isMuted, false)
-                                return true
-                            }
-                            url.startsWith("horizonz://watch-fallback") -> {
-                                loadTrailerIntoWebView(view, videoId, "", isMuted, true)
-                                return true
-                            }
+                    private fun handleInterceptUrl(url: String?): Boolean {
+                        if (url == null) return false
+                        if (url.contains("__hz_ended") || url.startsWith("horizonz://")) {
+                            jsBridge.onEnded()
+                            return true
                         }
                         return false
                     }
 
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        if (view != null && url != null && url != "about:blank") {
-                            view.evaluateJavascript(buildControllerJs(isMuted, isPaused), null)
+                    override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                        val reqUrl = request?.url?.toString()
+                        if (handleInterceptUrl(reqUrl)) return true
+                        if (request != null && request.isForMainFrame && reqUrl != null && !reqUrl.startsWith("https://www.minecraft.net")) {
+                            return true
                         }
+                        return false
+                    }
+
+                    @Deprecated("Deprecated in Java")
+                    override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                        return handleInterceptUrl(url)
                     }
                 }
-                val keyTag = "$videoId|$directStreamUrl"
-                tag = keyTag
-                loadTrailerIntoWebView(this, videoId, directStreamUrl, isMuted, false)
+                jsBridge.resetTrigger()
+                tag = videoId
+                loadDataWithBaseURL(
+                    "https://www.minecraft.net/",
+                    buildUnifiedPlayerHtml(videoId, directStreamUrl, isMuted),
+                    "text/html",
+                    "utf-8",
+                    null
+                )
                 webViewRef = this
             }
         },
         update = { wv ->
-            val keyTag = "$videoId|$directStreamUrl"
-            if (wv.tag != keyTag) {
-                wv.tag = keyTag
-                loadTrailerIntoWebView(wv, videoId, directStreamUrl, isMuted, false)
+            if (wv.tag != videoId) {
+                wv.tag = videoId
+                jsBridge.resetTrigger()
+                wv.loadDataWithBaseURL(
+                    "https://www.minecraft.net/",
+                    buildUnifiedPlayerHtml(videoId, directStreamUrl, isMuted),
+                    "text/html",
+                    "utf-8",
+                    null
+                )
             }
         }
     )
@@ -5552,13 +5709,13 @@ private fun CleanStoreViewport(
                         }
                     }
 
-                    // Right Project Summary Card
+                    // Right Project Summary Card (fixed layout so Favorite pill never wraps vertically!)
                     val isFav = detailProj.id in favoriteIds
                     Surface(
                         shape = RoundedCornerShape(20.dp),
                         color = CardSlateBg,
                         modifier = Modifier
-                            .width(220.dp)
+                            .width(236.dp)
                             .fillMaxHeight()
                     ) {
                         Column(
@@ -5574,17 +5731,21 @@ private fun CleanStoreViewport(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                LavenderTagBadge(text = detailProj.kindBadge)
+                                Box(modifier = Modifier.weight(1f, fill = false)) {
+                                    LavenderTagBadge(text = detailProj.category.badgeLabel)
+                                }
+
+                                Spacer(Modifier.width(6.dp))
 
                                 Surface(
                                     shape = RoundedCornerShape(50),
-                                    color = CardRowBg,
+                                    color = if (isFav) Color(0xFF3A2329) else CardRowBg,
                                     modifier = Modifier.animatedPressScale {
                                         favoriteIds = HorizonNativeBridge.toggleProjectFavorite(context, detailProj.id)
                                     }
                                 ) {
                                     Row(
-                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
@@ -5594,7 +5755,14 @@ private fun CleanStoreViewport(
                                             tint = if (isFav) Color(0xFFFF6E6E) else Color.White,
                                             modifier = Modifier.size(13.dp)
                                         )
-                                        Text("Favorite", fontSize = 10.sp, color = Color.White)
+                                        Text(
+                                            text = if (isFav) "Favorited" else "Favorite",
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = if (isFav) Color(0xFFFFB4B4) else Color.White,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
                                     }
                                 }
                             }
@@ -7116,6 +7284,286 @@ private fun CleanSettingsViewport(
                                 onConfigChange(config.copy(extraMouseTweaks = it, extraInventorySort = it))
                             }
                         )
+                    }
+
+                    SettingsSubCategory.AI_AGENT -> {
+                        val scope = rememberCoroutineScope()
+                        var localApiKey by remember {
+                            mutableStateOf(HorizonNativeBridge.loadGeminiApiKeyLocal(context))
+                        }
+                        var showApiKeyText by remember { mutableStateOf(false) }
+                        var availableModels by remember {
+                            mutableStateOf(DEFAULT_GEMINI_MODELS)
+                        }
+                        var isRefreshingModels by remember { mutableStateOf(false) }
+                        var isTestingApi by remember { mutableStateOf(false) }
+                        var testResultDialogText by remember { mutableStateOf<String?>(null) }
+                        var testResultSuccess by remember { mutableStateOf(false) }
+
+                        LaunchedEffect(Unit) {
+                            val savedKey = HorizonNativeBridge.loadGeminiApiKeyLocal(context)
+                            if (savedKey.isNotBlank()) {
+                                val live = withContext(Dispatchers.IO) {
+                                    HorizonNativeBridge.fetchAvailableGeminiModels(context, savedKey)
+                                }
+                                if (live.isNotEmpty()) {
+                                    availableModels = live
+                                }
+                            }
+                        }
+
+                        if (testResultDialogText != null) {
+                            AlertDialog(
+                                onDismissRequest = { testResultDialogText = null },
+                                containerColor = Color(0xFF1E2429),
+                                title = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = if (testResultSuccess) Icons.Default.CheckCircle else Icons.Default.ErrorOutline,
+                                            contentDescription = null,
+                                            tint = if (testResultSuccess) Color(0xFF81C784) else Color(0xFFFF8A80)
+                                        )
+                                        Text(
+                                            text = if (testResultSuccess) "Google AI Studio Terhubung!" else "Koneksi Gemini API Gagal",
+                                            fontSize = 16.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                    }
+                                },
+                                text = {
+                                    Text(
+                                        text = testResultDialogText.orEmpty(),
+                                        fontSize = 13.sp,
+                                        color = Color(0xFFD5DEE5),
+                                        lineHeight = 18.sp
+                                    )
+                                },
+                                confirmButton = {
+                                    Button(
+                                        onClick = { testResultDialogText = null },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SkyBlueAccent)
+                                    ) {
+                                        Text("OK", color = SkyBlueDarkText, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            )
+                        }
+
+                        ZalithSettingToggleCard(
+                            title = "Enable Minecraft In-Game AI Agent (Gemini AI Studio)",
+                            description = "Aktifkan AI Agent di dalam Minecraft 26.3 yang terhubung ke Google AI Studio (Gemini API) & socket kontrol game (horizon-control.json)",
+                            checked = config.aiAgentEnabled,
+                            onCheckedChange = { onConfigChange(config.copy(aiAgentEnabled = it)) }
+                        )
+
+                        ZalithSettingDropdownCard(
+                            title = "AI Agent Engine Provider",
+                            description = "Pilih integrasi Google AI Studio (Gemini API dengan Local API Key) atau Local Socket saja",
+                            selectedItem = config.aiAgentProvider,
+                            options = HorizonAiAgentProvider.entries,
+                            itemLabel = { it.label },
+                            onSelect = { onConfigChange(config.copy(aiAgentProvider = it)) }
+                        )
+
+                        // Local-Only Google AI Studio API Key Card
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = CardSlateBg,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "Google AI Studio API Key (Disimpan Lokal)",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White
+                                        )
+                                        Text(
+                                            text = "API Key disimpan khusus di penyimpanan privat perangkat (0600) dan tidak pernah dikirim ke log atau server lain.",
+                                            fontSize = 12.sp,
+                                            color = MutedSubtitleText
+                                        )
+                                    }
+                                    LavenderTagBadge(
+                                        text = if (localApiKey.isNotBlank()) "Key Tersimpan Lokal" else "Belum Diisi"
+                                    )
+                                }
+
+                                OutlinedTextField(
+                                    value = localApiKey,
+                                    onValueChange = { newKey ->
+                                        localApiKey = newKey
+                                        HorizonNativeBridge.saveGeminiApiKeyLocal(context, newKey)
+                                    },
+                                    label = { Text("Paste Google AI Studio API Key (AIzaSy...)", fontSize = 11.sp) },
+                                    singleLine = true,
+                                    visualTransformation = if (showApiKeyText) {
+                                        androidx.compose.ui.text.input.VisualTransformation.None
+                                    } else {
+                                        androidx.compose.ui.text.input.PasswordVisualTransformation()
+                                    },
+                                    trailingIcon = {
+                                        IconButton(onClick = { showApiKeyText = !showApiKeyText }) {
+                                            Icon(
+                                                imageVector = if (showApiKeyText) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                                contentDescription = "Show/Hide API Key",
+                                                tint = SkyBlueAccent
+                                            )
+                                        }
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Button(
+                                        onClick = {
+                                            HorizonNativeBridge.saveGeminiApiKeyLocal(context, localApiKey)
+                                            Toast.makeText(
+                                                context,
+                                                "API Key Gemini berhasil disimpan secara lokal di perangkat!",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            scope.launch {
+                                                isRefreshingModels = true
+                                                val models = withContext(Dispatchers.IO) {
+                                                    HorizonNativeBridge.fetchAvailableGeminiModels(context, localApiKey)
+                                                }
+                                                availableModels = models
+                                                isRefreshingModels = false
+                                            }
+                                        },
+                                        colors = ButtonDefaults.buttonColors(containerColor = SkyBlueAccent),
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Save, contentDescription = null, tint = SkyBlueDarkText, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Simpan Key & Muat Model", fontSize = 12.sp, color = SkyBlueDarkText, fontWeight = FontWeight.Bold)
+                                    }
+
+                                    OutlinedButton(
+                                        onClick = {
+                                            if (!isTestingApi) {
+                                                isTestingApi = true
+                                                scope.launch {
+                                                    val (ok, msg) = withContext(Dispatchers.IO) {
+                                                        HorizonNativeBridge.testGeminiApiConnection(
+                                                            context = context,
+                                                            apiKeyOverride = localApiKey,
+                                                            modelId = config.geminiModel
+                                                        )
+                                                    }
+                                                    isTestingApi = false
+                                                    testResultSuccess = ok
+                                                    testResultDialogText = msg
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Icon(Icons.Default.Bolt, contentDescription = null, tint = SkyBlueAccent, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            text = if (isTestingApi) "Menguji Gemini..." else "Test Koneksi Gemini",
+                                            fontSize = 12.sp,
+                                            color = SkyBlueAccent,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                    }
+
+                                    if (localApiKey.isNotBlank()) {
+                                        OutlinedButton(
+                                            onClick = {
+                                                localApiKey = ""
+                                                HorizonNativeBridge.clearGeminiApiKeyLocal(context)
+                                                Toast.makeText(context, "API Key lokal dihapus.", Toast.LENGTH_SHORT).show()
+                                            }
+                                        ) {
+                                            Icon(Icons.Default.DeleteOutline, contentDescription = "Clear Key", tint = Color(0xFFFF8A80), modifier = Modifier.size(16.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Gemini Model Selector Dropdown
+                        val selectedModelObj = availableModels.firstOrNull { it.modelId == config.geminiModel }
+                            ?: GeminiModelOption(
+                                modelId = config.geminiModel,
+                                displayName = config.geminiModel,
+                                badge = "GEMINI",
+                                description = "Selected Google AI Studio model"
+                            )
+
+                        ZalithSettingDropdownCard(
+                            title = if (isRefreshingModels) "Model Google AI Studio (Memuat daftar model...)" else "Pilih Model Google AI Studio (Gemini API)",
+                            description = "${selectedModelObj.description} (${selectedModelObj.badge})",
+                            selectedItem = selectedModelObj,
+                            options = availableModels,
+                            itemLabel = { "${it.displayName} [${it.modelId}]" },
+                            onSelect = { chosen ->
+                                onConfigChange(config.copy(geminiModel = chosen.modelId))
+                            }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "In-Game Chat Assistant (@ai / !ai Trigger)",
+                            description = "Izinkan mengetik @ai atau !ai di chat Minecraft untuk bertanya atau memberi perintah langsung ke Gemini AI Agent",
+                            checked = config.aiAgentAutoAssistChat,
+                            onCheckedChange = { onConfigChange(config.copy(aiAgentAutoAssistChat = it)) }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "Autonomous Game Control Actions (Move, Look, Mine, Place, Craft)",
+                            description = "Izinkan Gemini AI Agent mengendalikan aksi karakter melalui protokol lokal horizon-control.json saat diminta",
+                            checked = config.aiAgentAutonomousActions,
+                            onCheckedChange = { onConfigChange(config.copy(aiAgentAutonomousActions = it)) }
+                        )
+
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = CardSlateBg,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Instruksi & Peran Default AI Agent di Minecraft",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Instruksi sistem yang dikirim ke model ${config.geminiModel} saat AI Agent aktif di dalam dunia Minecraft 26.3:",
+                                    fontSize = 12.sp,
+                                    color = MutedSubtitleText
+                                )
+                                OutlinedTextField(
+                                    value = config.aiAgentTaskPrompt,
+                                    onValueChange = { onConfigChange(config.copy(aiAgentTaskPrompt = it)) },
+                                    label = { Text("System Prompt / Tugas AI Agent", fontSize = 11.sp) },
+                                    maxLines = 3,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
                     }
 
                     SettingsSubCategory.CONTROLS -> {
