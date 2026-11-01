@@ -187,7 +187,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "1.3"
+    const val INSTALLED_LAUNCHER_VERSION = "1.4"
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
     private val memoryLogs = ConcurrentLinkedDeque<String>()
@@ -769,7 +769,7 @@ object HorizonNativeBridge {
                 val n = item.fileName.lowercase(Locale.US)
                 when {
                     n == "default.png" -> 0
-                    n.matches(Regex("default\d+\.png")) -> n.removePrefix("default").removeSuffix(".png").toIntOrNull() ?: 999
+                    n.matches(Regex("default\\d+\\.png")) -> n.removePrefix("default").removeSuffix(".png").toIntOrNull() ?: 999
                     else -> 1000
                 }
             }.thenByDescending { it.addedAt }
