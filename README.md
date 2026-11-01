@@ -14,12 +14,12 @@
 
 <!-- HORIZONZ_VERSION_START -->
 <p align="center">
-  <a href="https://github.com/Fadiba21/Horizonz-Launcher/releases/latest"><img src="https://img.shields.io/badge/Release-v1.1.0-52b788?style=for-the-badge&logo=android&logoColor=white" alt="Release v1.1.0"></a>
-  <strong>Current source:</strong> <code>1.1.0-HorizonZ</code> · <strong>versionCode:</strong> <code>51</code> · <strong>Minimum Android:</strong> API 28 · <strong>Compile/target SDK:</strong> 35/35
+  <a href="https://github.com/Fadiba21/Horizonz-Launcher/releases/latest"><img src="https://img.shields.io/badge/Release-v1.2.0-52b788?style=for-the-badge&logo=android&logoColor=white" alt="Release v1.2.0"></a>
+  <strong>Current source:</strong> <code>1.2.0-HorizonZ</code> · <strong>versionCode:</strong> <code>52</code> · <strong>Minimum Android:</strong> API 28 · <strong>Compile/target SDK:</strong> 35/35
 </p>
 <!-- HORIZONZ_VERSION_END -->
 
-> **Banner and screenshots:** these images are included with the HorizonZ 1.1.0 source archive.
+> **Banner and screenshots:** these images are included with the HorizonZ 1.2.0 source archive.
 
 ## 📘 Contents
 
@@ -36,13 +36,13 @@
 
 ## 🎮 About HorizonZ
 
-HorizonZ is an Android launcher for **Minecraft: Java Edition**, powered by the native Horizon runtime. Archive v1.1.0 combines a Kotlin/Jetpack Compose Android interface with a Rust engine packaged as a JNI library. The app provides a dashboard, game-version and asset management, a content catalog, file access, accounts and skins, logs, and settings. The game runs in a separate Android process from the launcher.
+HorizonZ is an Android launcher for **Minecraft: Java Edition**, powered by the native Horizon runtime. Archive v1.2.0 combines a Kotlin/Jetpack Compose Android interface with a Rust engine packaged as a JNI library. The app provides a dashboard, game-version and asset management, a content catalog, file access, accounts and skins, logs, and settings. The game runs in a separate Android process from the launcher.
 
 This source targets Minecraft Java Edition 26.3. HorizonZ is a community project and **is not affiliated with Mojang or Microsoft**.
 
 ## ✨ Features
 
-| Area | What Archive v1.1.0 contains |
+| Area | What Archive v1.2.0 contains |
 |---|---|
 | 🏠 **Home dashboard** | Wallpaper carousel, splash text, and user wallpaper import; CI can prepare up to 18 widescreen 1280 × 720 backgrounds. |
 | ⬇️ **Game and assets** | First-run game and asset downloads with Android progress notifications, including live stage and transfer progress. |
@@ -59,12 +59,12 @@ The main navigation includes **Home**, **Downloads**, **Store**, **Files & Mods*
 
 <!-- HORIZONZ_UPDATE_SUMMARY_START -->
 <!-- HORIZONZ_UPDATE_SUMMARY_LANGUAGE: en -->
-**v1.1.0-HorizonZ — Archive source highlights.**
+**v1.2.0-HorizonZ — Archive source highlights.**
 
-- **Upstream build assets:** the CI patch syncs and verifies Rust `include_str!`/`include_bytes!` files from upstream, restoring required data such as `docs/modpacks/atm10-mods.csv` before compilation.
-- **Versioned release:** increments the Android app to `1.1.0-HorizonZ` (`versionCode` 51) and labels APK artifacts and releases as v1.1.
-- **ABI build support:** retains both `arm64-v8a` and `armeabi-v7a` build targets; the helper enables the `audio` feature configuration for ARMv7.
-- **Runtime integration:** keeps the existing Horizon Store, `.hmod` validation, touch controls, background downloads, and settings synchronization with the engine.
+- **Upstream include scan:** the patch script removes comments before scanning Rust `include_str!`/`include_bytes!` references, so commented-out examples do not create false missing-file reports.
+- **Versioned release:** increments the Android app to `1.2.0-HorizonZ` (`versionCode` 52) and labels APK artifacts and releases as v1.2.
+- **Update detection fixes:** corrects quote decoding and regex escaping used when parsing fork release versions.
+- **Dual-ABI release:** keeps `arm64-v8a` and `armeabi-v7a` builds; release APKs and checksums are published only after both succeed.
 <!-- HORIZONZ_UPDATE_SUMMARY_END -->
 
 ## 🧱 How it works
@@ -87,10 +87,10 @@ The engine workspace is not fully stored in this repository. The release workflo
 
 ## ⚙️ Technical specifications
 
-| Component | Archive v1.1.0 value |
+| Component | Archive v1.2.0 value |
 |---|---|
 | Application ID | `dev.horizon.android` |
-| `versionName` / `versionCode` | `1.1.0-HorizonZ` / `51` |
+| `versionName` / `versionCode` | `1.2.0-HorizonZ` / `52` |
 | Minimum Android | API 28 (Android 9) |
 | Compile / target SDK | API 35 / API 35 |
 | APK ABIs | `arm64-v8a` and `armeabi-v7a` |
@@ -118,7 +118,7 @@ python3 tools/android_build.py --abi arm64-v8a --profile release --public
 
 ## 📸 Authentic launcher screenshots
 
-These launcher screenshots are included with the HorizonZ 1.1.0 source archive.
+These launcher screenshots are included with the HorizonZ 1.2.0 source archive.
 
 ### 🏠 Home
 
@@ -159,7 +159,7 @@ These launcher screenshots are included with the HorizonZ 1.1.0 source archive.
 
 ## ♻️ ZIP updates and README language
 
-This branch is based on **Archive v1.1.0-HorizonZ**. The input ZIP is intentionally not committed under `Update/`; only its source files are applied.
+This branch is based on **Archive v1.2.0-HorizonZ**. The input ZIP is intentionally not committed under `Update/`; only its source files are applied.
 
 The README starts with `<!-- HORIZONZ_README_PRESERVE -->` and `<!-- HORIZONZ_README_LANGUAGE: en -->`. The ZIP updater preserves an existing README carrying the preserve marker and updates only supported version blocks when matching markers are present; it does not replace the README wholesale. This English summary and the release-specific feature details are maintained to match the applied source.
 

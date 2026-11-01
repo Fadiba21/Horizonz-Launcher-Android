@@ -37,7 +37,9 @@ def ensure_upstream_include_assets():
     verified_count = 0
     for rs_file in sorted(crates_dir.rglob("*.rs")):
         try:
-            content = rs_file.read_text(encoding="utf-8", errors="ignore")
+            raw_content = rs_file.read_text(encoding="utf-8", errors="ignore")
+            content = re.sub(r"/\*.*?\*/", "", raw_content, flags=re.S)
+            content = re.sub(r"//.*", "", content)
         except Exception:
             continue
         for match in include_pattern.finditer(content):
