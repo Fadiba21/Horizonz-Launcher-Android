@@ -257,7 +257,7 @@ public final class HorizonActivity extends NativeActivity {
             while (watchdogRunning) {
                 try {
                     String stateResp = sendControlCommandToGame(homeDir, "state");
-                    if (stateResp != null && !stateResp.isEmpty() && !stateResp.contains(""error"")) {
+                    if (stateResp != null && !stateResp.isEmpty() && !stateResp.contains("\"error\"")) {
                         if (!greetedInWorld) {
                             greetedInWorld = true;
                             sendControlCommandToGame(

@@ -9,44 +9,45 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v1.9-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/HorizonZ-Launcher-Android/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v1.10-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-v0.7.6-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
+[![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
 <!-- VERSION_BADGE_END -->
 
 </div>
 
 <!-- LATEST_VERSION_START -->
-> 🚀 **Latest Release — HorizonZ v1.9**: Full **Google AI Studio (Gemini API)** integration with **22+ model options** (`Gemini 4 Argon`, `Gemini 4.0 Ultra/Pro/Flash`, `Gemini 3.8 Pro/Flash`, `Gemini 3.5 Flash-Lite`, `Gemini 2.5 Pro/Flash`, `Gemma 3`), a **Random Minecraft Cinematic & Official Trailer** player (< 5 minutes) on the Dashboard, full support for **WGSL Shader Packs (`horizon-shaders.toml` schema 1)**, and **Native Mods (`.hnmod` / `.hmod`)** synchronization.
+> **HorizonZ v1.10 source update:** Fixes the invalid Java string literal at `HorizonActivity.java:260` that prevented `compileReleaseJavaWithJavac`, and updates the app version metadata. Existing v1.9 capabilities remain included, such as Gemini integration, cinematic playback, WGSL shader packs, and executable mods.
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
 
-- 🦀 **100% Native Rust Engine (`Minecraft 26.3`)**: Runs directly on **Vulkan** & **OpenGL ES (`wgpu`)** through `libhorizon_android.so` without *garbage collection* or Java VM overhead (`arm64-v8a` & `armeabi-v7a`).
-- 🤖 **In-Game AI Agent (`Google AI Studio / Gemini API`)**: Connects to the game's local control protocol (`horizon-control.json`) with **22+ Gemini model options** (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, `Gemini 2.5`, etc.) and **100% local on-device API key storage (`0600`)**.
-- 🎬 **Random Cinematic & Trailer Player**: Randomly plays a collection of **Minecraft Cinematic & Official Trailer** videos, each under 5 minutes, in 720p quality, with captions disabled by default and a minimalist three-dot control menu.
-- 🧩 **Two-Way Store & Manager Synchronization**: Download, install, and update **Mods (`.hmod`)**, **Native Mods (`.hnmod`)**, **Shader Packs (`.hshader`)**, **Resource Packs**, and **Modpacks (`.hpack`)** directly from the `playhorizon.dev/mods` catalog.
-- 🧠 **Dynamic RAM Allocation**: Configures the *engine* memory budget (`horizon-memory.txt` & `WGPU_MEMORY_BUDGET_MB`) according to the device's RAM capacity, with **Unlimited (OS Limit)** as the default mode.
-- 🎨 **Interactive 3D Skin Studio**: Preview 3D characters with 360° rotation and walking animation, automatically detect **Wide (4px)** / **Slim (3px)** arms, and browse a library of ready-to-use skins.
-- ⚡ **Zero-Overhead Gaming**: All background *threads*, UI *timers*, and the trailer `WebView` are automatically stopped when entering the `:game` process.
+- 🦀 **100% Native Rust Engine (`Minecraft 26.3`)**: Runs directly on **Vulkan** and **OpenGL ES (`wgpu`)** via `libhorizon_android.so` without Java VM garbage collection overhead (`arm64-v8a` & `armeabi-v7a`).
+- 🤖 **In-Game AI Agent (`Google AI Studio / Gemini API`)**: Connects to the game's local control endpoint (`horizon-control.json` TCP `port` + `auth <TOKEN>` protocol) and an in-game `✨ AI` HUD overlay with **22+ selectable Gemini models** (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, `Gemini 2.5`, etc.) and **100% device-local API key storage (`0600`)**.
+- 🎬 **Random Cinematic & Trailer Player**: Plays a curated playlist of **Minecraft Cinematic & Official Trailers** under 5 minutes in **random shuffle** order at 720p, with captions disabled by default and a collapsible 3-dot control menu.
+- 🧩 **Two-Way Store & Manager Synchronization**: Browse, download, install, and update **Mods (`.hmod` containing `mod.wasm`)**, **Native Mods (`.hnmod`)**, **Shader Packs (`.hshader`)**, **Resource Packs**, and **Modpacks (`.hpack`)** from the `playhorizon.dev/mods` catalog.
+- 🧠 **Dynamic RAM Allocation**: Configure the engine memory budget (`horizon-memory.txt` & `WGPU_MEMORY_BUDGET_MB`) via a device-RAM-aware slider, defaulting to **Unlimited (OS Limit)**.
+- 🎨 **Interactive 3D Skin Studio**: Live 3D character preview (360° touch rotation & walking animation), automatic **Wide (4px)** / **Slim (3px)** arm model detection, custom skin naming, and a saved skin selector.
+- ⚡ **Zero-Overhead Gaming**: All launcher background threads, UI timers, and trailer `WebView` instances automatically pause or terminate when switching to the `:game` process.
 
-## ⚙️ Architecture & Technical Details
+## ⚙️ Architecture & Technical Overview
 
-| Technical Component | Specifications & How It Works in HorizonZ |
+| Technical Component | Specification & How It Works in HorizonZ |
 | :--- | :--- |
-| **Process & Rendering (`:game`)** | `HorizonActivity` runs in a separate process (`android:process=":game"`) using `NativeActivity` + `wgpu` (**Vulkan Compatibility**, **Vulkan High-Perf**, or **OpenGL ES**) with support for *Android ADPF thermal hints*. |
-| **Assets & World Generation (`26.3`)** | Downloads and verifies SHA-1/SHA-256 for `client.jar`, Mojang CDN asset objects, the `26.3` *worldgen* registry, and 60 touch-control textures in `.local/horizon-client/26.3`. |
-| **Mod Pipeline & WGSL Shaders** | Supports `.hmod` and `.hnmod` *mixin* compilation (`horizon-mods.txt` & `horizon-extras.txt`), as well as automatic `.hshader` validation (`horizon-shaders.toml` `schema = 1` for the `sky.wgsl` & `post.wgsl` *stages*). |
-| **Gemini AI Agent Bridge** | The `HorizonZ-GeminiAgentBridge` daemon connects the `$HORIZON_CONTROL` JSON-line *socket* (`state`, `inventory`, `looking-at`, `messages`) to the `generativelanguage.googleapis.com` endpoint using the local key `horizon-gemini-secret.json` (`0600`). |
-| **Auto-Synced Runtime (`BBS/`)** | The `BBS/sync_and_merge_bbs.py` module pulls *runtime* updates from `Vasysik/horizon-android` (`v0.7.6`) and automatically reapplies all HorizonZ Rust *patches* during the *build*. |
+| **Process & Rendering (`:game`)** | `HorizonActivity` runs in an isolated process (`android:process=":game"`) using `NativeActivity` + `wgpu` (**Vulkan Compatibility**, **Vulkan High-Perf**, or **OpenGL ES**) with Android ADPF thermal hints. |
+| **Assets & Worldgen (`26.3`)** | Downloads and verifies SHA-1/SHA-256 checksums for `client.jar`, Mojang CDN asset objects, `26.3` worldgen registries, and 60 touch control textures into `.local/horizon-client/26.3`. |
+| **Mod & WGSL Shader Pipeline** | Supports executable `.hmod` WebAssembly mods (`mod.wasm`) and `.hnmod` manifests (`horizon-mods.txt` & `horizon-extras.txt`), plus automatic `.hshader` verification (`horizon-shaders.toml` `schema = 1` with `input.color`-compliant `sky.wgsl` and `post.wgsl` stages). |
+| **Gemini AI Agent Bridge** | `HorizonZ-GeminiAgentBridge` connects the local `$HORIZON_CONTROL` TCP JSON-file socket (`state`, `inventory`, `looking-at`, `messages`, `chat`, `command`) and the in-game `✨ AI` command panel to `generativelanguage.googleapis.com` using the local key file `horizon-gemini-secret.json` (`0600`). |
+| **Runtime Auto-Sync (`BBS/`)** | `BBS/sync_and_merge_bbs.py` tracks runtime updates from `Vasysik/horizon-android` (`v0.7.6`) and reapplies HorizonZ Rust and Android patches during the build workflow. |
 
-## 📱 Launcher Interface Screenshots
+## 📱 Launcher User Interface
 
-### 🏠 1. Main Dashboard (HD Wallpaper & Random Cinematic Trailer)
+### 🏠 1. Main Dashboard (HD Wallpapers & Random Cinematic Trailer)
 <img src="docs/screenshots/launcher-dashboard.jpg" alt="HorizonZ Dashboard" width="100%" />
 
-### ⬇️ 2. Game & Assets Manager (Download, Smart Repair & Asset Allocation)
+### ⬇️ 2. Game & Assets Manager (Download, Smart Repair & Asset Storage)
 <img src="docs/screenshots/launcher-versions.jpg" alt="HorizonZ Game & Assets" width="100%" />
 
 ### 🛒 3. HorizonZ Store (`playhorizon.dev/mods` Registry)
@@ -61,21 +62,23 @@
 ### ✨ 6. Settings & AI Agent Integration (Google AI Studio / Gemini API)
 <img src="docs/screenshots/launcher-settings.jpg" alt="HorizonZ Settings & Gemini AI Agent" width="100%" />
 
-## 📦 APK Releases & What's New
+## 📥 APK Downloads & What's New
 
-### What's New in v1.9
-- **In-game Gemini AI Agent:** Added a floating assistant button and panel inside Minecraft, with `@ai` / `!ai` chat triggers and prompt/action handling through the locally configured Gemini API key.
-- **More reliable Native Mods (`.hmod`):** Validates packages and preserves valid `mod.wasm` payloads; restores supported official executable mods from APK-bundled copies or official release downloads when missing.
-- **Safer mod synchronization:** Routes supported official mods to their executable `.hmod` release packages instead of source-only `.hnmod` archives that lack `mod.wasm`.
+### HorizonZ v1.10 APKs
+- **Target ABIs:** `HorizonZ-Launcher-1.10-arm64-v8a.apk` (64-bit ARMv8 devices) and `HorizonZ-Launcher-1.10-armeabi-v7a.apk` (32-bit ARMv7 devices).
+- **What's New in v1.10:**
+  - **Java compilation fix:** Corrected the malformed string literal in `HorizonActivity.java:260` by escaping the quote characters around `"error"` in the Gemini control-response check, removing the Java syntax error that blocked `compileReleaseJavaWithJavac`.
+  - **App version metadata:** Updated Android `versionCode` from `59` to `60`, `versionName` to `1.10.0-HorizonZ`, and the installed-launcher version label to `1.10`.
+  - **Build patch identification:** Updated the patch updater's User-Agent from `HorizonZ-CI/1.9` to `HorizonZ-CI/1.10`.
 
 ### Quick Start
-1. **Install the APK**: Download the APK matching your device's ABI (`arm64-v8a` or `armeabi-v7a`) from the [**Releases**](https://github.com/Fadiba21/HorizonZ-Launcher-Android/releases) page.
-2. **Download 26.3 Assets**: Open the **Game & Assets** tab, then download the official Minecraft 26.3 assets until the status reaches **100%**.
-3. **Configure the AI Agent (Optional)**: Open **Settings > AI Agent**, paste an API key from [Google AI Studio](https://aistudio.google.com/apikey) (stored locally on your phone), choose a model (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, etc.), then tap **Test Gemini Connection**.
-4. **Start Playing**: Press **PLAY** on the Dashboard to enter Minecraft 26.3; type `@ai <message>` in the in-game chat at any time to call the AI assistant.
+1. **Install the APK:** Download the APK matching your device ABI (`arm64-v8a` or `armeabi-v7a`) from the [**Releases**](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) page.
+2. **Download 26.3 assets:** Open the **Game & Assets** tab and download the official Minecraft 26.3 assets until progress reaches **100%**.
+3. **Configure the AI Agent (Optional):** Open **Settings > AI Agent**, paste your API key from [Google AI Studio](https://aistudio.google.com/apikey) (saved locally on your device), choose a model (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, etc.), and tap **Test Gemini Connection**.
+4. **Launch and play:** Tap **PLAY** on the Dashboard to enter Minecraft 26.3; tap the **`✨ AI`** button at the top-left of the in-game screen or type `@ai <message>` in chat at any time to use the AI assistant.
 
 ## 📜 License & Credits
 
-- 🔗 **Fork Repository**: [Fadiba21/HorizonZ-Launcher-Android](https://github.com/Fadiba21/HorizonZ-Launcher-Android)
+- 🔗 **Fork Repository**: [Fadiba21/Horizonz-Launcher-Android](https://github.com/Fadiba21/Horizonz-Launcher-Android)
 - 📱 **Upstream Android Runtime**: [Vasysik/horizon-android](https://github.com/Vasysik/horizon-android) (`v0.7.6`)
 - 🦀 **Core Rust Engine**: [horizon-rust/horizon](https://github.com/horizon-rust/horizon) (`Apache-2.0`)
