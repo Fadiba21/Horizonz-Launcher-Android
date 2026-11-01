@@ -1850,21 +1850,7 @@ private fun ZalithReferenceTopBar(
                 )
             }
 
-            if (installStatus.running) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = SubRailCapsuleActive
-                ) {
-                    Text(
-                        text = if (installStatus.paused) "Paused ${installStatus.percent}%"
-                        else "${installStatus.percent}% • ${installStatus.speedText.ifBlank { "Downloading" }}",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = SkyBlueAccent,
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                    )
-                }
-            }
+
         }
 
         Row(
@@ -2010,7 +1996,7 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                 st.id = '__hz_style';
                 st.innerHTML = 'html, body { margin:0 !important; padding:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; overflow:hidden !important; } ' +
                   '.ytp-chrome-top, .ytp-chrome-bottom, .ytp-watermark, .ytp-pause-overlay, .ytp-gradient-top, .ytp-gradient-bottom, .ytp-show-cards-title, .ytp-endscreen-content, .ytp-ce-element, .ytp-PaidContentOverlay, .iv-branding, ytm-mobile-topbar-renderer, ytm-slim-video-metadata-section-renderer, ytm-item-section-renderer, ytm-pivot-bar-renderer, ytm-companion-ad-renderer, .player-controls-content { display:none !important; opacity:0 !important; pointer-events:none !important; } ' +
-                  '.html5-video-player, #player, #player-container-id, .html5-video-container { position:fixed !important; inset:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; z-index:2147483646 !important; } ' +
+                  '.ytp-caption-window-container, .caption-window, .ytp-caption-segment, ytm-caption-track { display:none !important; opacity:0 !important; visibility:hidden !important; } ' + '.html5-video-player, #player, #player-container-id, .html5-video-container { position:fixed !important; inset:0 !important; width:100vw !important; height:100vh !important; background:#000 !important; z-index:2147483646 !important; } ' +
                   'video.html5-main-video, video { position:fixed !important; top:-4% !important; left:-4% !important; width:108vw !important; height:108vh !important; object-fit:cover !important; background:#000 !important; z-index:2147483647 !important; pointer-events:none !important; }';
                 if (document.head) document.head.appendChild(st);
               }
@@ -2031,6 +2017,13 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                     var v = document.querySelector('video');
                     if (v) {
                       v.muted = !!window.__hzMuted;
+                      if (v.textTracks) {
+                        for (var tIdx = 0; tIdx < v.textTracks.length; tIdx++) {
+                          v.textTracks[tIdx].mode = 'disabled';
+                        }
+                      }
+                      if (mp && mp.unloadModule) { try { mp.unloadModule('captions'); } catch(e) {} }
+                      if (mp && mp.setOption) { try { mp.setOption('captions', 'track', {}); } catch(e) {} }
                       if (!window.__hzMuted) { v.volume = 1.0; }
                       v.setAttribute('playsinline', 'true');
                       v.setAttribute('webkit-playsinline', 'true');
@@ -2098,7 +2091,7 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                 """.trimIndent()
                 wv.loadDataWithBaseURL("https://www.minecraft.net/", directHtml, "text/html", "utf-8", null)
             } else if (useMobileWatch) {
-                val watchUrl = "https://m.youtube.com/watch?v=$vid&autoplay=1&mute=$muteParam&playsinline=1"
+                val watchUrl = "https://m.youtube.com/watch?v=$vid&autoplay=1&mute=$muteParam&playsinline=1&cc_load_policy=0"
                 wv.loadUrl(
                     watchUrl,
                     mapOf(
@@ -2107,7 +2100,7 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                     )
                 )
             } else {
-                val embedUrl = "https://www.youtube.com/embed/$vid?autoplay=1&mute=$muteParam&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&fs=0&playsinline=1&enablejsapi=1&loop=1&playlist=$vid&vq=hd720&origin=https://www.minecraft.net"
+                val embedUrl = "https://www.youtube.com/embed/$vid?autoplay=1&mute=$muteParam&controls=0&modestbranding=1&rel=0&showinfo=0&iv_load_policy=3&cc_load_policy=0&cc_lang_pref=none&fs=0&playsinline=1&enablejsapi=1&loop=1&playlist=$vid&vq=hd720&origin=https://www.minecraft.net"
                 wv.loadUrl(
                     embedUrl,
                     mapOf(
@@ -2407,61 +2400,81 @@ private fun CleanHomeViewport(
                     )
             )
 
+            var isDashboardMenuExpanded by remember { mutableStateOf(false) }
+
+            // Animated 3-Dots Corner Controller (minimizes buttons into a sleek 3-dots pill!)
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
-                    .padding(14.dp),
+                    .padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 AnimatedVisibility(
-                    visible = isVideoMode,
-                    enter = fadeIn(tween(300)) + expandHorizontally(tween(300)),
-                    exit = fadeOut(tween(220)) + shrinkHorizontally(tween(220))
+                    visible = isDashboardMenuExpanded,
+                    enter = fadeIn(tween(250)) + expandHorizontally(tween(250)),
+                    exit = fadeOut(tween(180)) + shrinkHorizontally(tween(200))
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        DashboardQuickIconPill(
-                            icon = if (config.muteTrailerVideo) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                            label = if (config.muteTrailerVideo) "Silent" else "Sound On",
-                            onClick = {
-                                onConfigChange(config.copy(muteTrailerVideo = !config.muteTrailerVideo))
-                            }
-                        )
-                        DashboardQuickIconPill(
-                            icon = Icons.Default.SkipNext,
-                            label = "Next Trailer",
-                            onClick = {
-                                currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
-                            }
-                        )
-                    }
-                }
-
-                AnimatedVisibility(
-                    visible = !isVideoMode,
-                    enter = fadeIn(tween(300)) + expandHorizontally(tween(300)),
-                    exit = fadeOut(tween(220)) + shrinkHorizontally(tween(220))
-                ) {
-                    DashboardQuickIconPill(
-                        icon = Icons.Default.Wallpaper,
-                        label = "Wallpaper",
-                        onClick = { wallpaperPicker.launch("image/*") }
-                    )
-                }
-
-                DashboardQuickIconPill(
-                    icon = if (isVideoMode) Icons.Default.Image else Icons.Default.PlayCircleFilled,
-                    label = if (isVideoMode) "Use Wallpaper" else "Play Trailer",
-                    onClick = {
-                        val nextVideo = !isVideoMode
-                        onConfigChange(
-                            config.copy(
-                                backgroundMode = if (nextVideo) HorizonBackgroundMode.YOUTUBE_TRAILER else HorizonBackgroundMode.WALLPAPER,
-                                useYoutubeTrailerWallpaper = nextVideo
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isVideoMode) {
+                            DashboardQuickIconPill(
+                                icon = if (config.muteTrailerVideo) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                                label = if (config.muteTrailerVideo) "Silent" else "Sound On",
+                                onClick = {
+                                    onConfigChange(config.copy(muteTrailerVideo = !config.muteTrailerVideo))
+                                }
                             )
+                            DashboardQuickIconPill(
+                                icon = Icons.Default.SkipNext,
+                                label = "Next Trailer",
+                                onClick = {
+                                    currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                                }
+                            )
+                        } else {
+                            DashboardQuickIconPill(
+                                icon = Icons.Default.Wallpaper,
+                                label = "Ganti Wallpaper",
+                                onClick = { wallpaperPicker.launch("image/*") }
+                            )
+                        }
+
+                        DashboardQuickIconPill(
+                            icon = if (isVideoMode) Icons.Default.Image else Icons.Default.PlayCircleFilled,
+                            label = if (isVideoMode) "Mode Wallpaper" else "Play Trailer",
+                            onClick = {
+                                val nextVideo = !isVideoMode
+                                onConfigChange(
+                                    config.copy(
+                                        backgroundMode = if (nextVideo) HorizonBackgroundMode.YOUTUBE_TRAILER else HorizonBackgroundMode.WALLPAPER,
+                                        useYoutubeTrailerWallpaper = nextVideo
+                                    )
+                                )
+                            }
                         )
                     }
-                )
+                }
+
+                // Sleek Minimalist 3-Dots Menu Pill (always accessible, zero video obstruction!)
+                Surface(
+                    shape = CircleShape,
+                    color = if (isDashboardMenuExpanded) SubRailCapsuleActive else Color(0xFF14181B).copy(alpha = 0.78f),
+                    modifier = Modifier
+                        .size(36.dp)
+                        .animatedPressScale { isDashboardMenuExpanded = !isDashboardMenuExpanded }
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isDashboardMenuExpanded) Icons.Default.Close else Icons.Default.MoreVert,
+                            contentDescription = "Menu Pengaturan Video & Wallpaper",
+                            tint = if (isDashboardMenuExpanded) SkyBlueAccent else Color.White,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
             }
 
             Column(
@@ -3909,71 +3922,22 @@ private fun CleanVersionsViewport(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header Row: Simple Title + Status Pill
-            Row(
+            // Header Row: Simple Title & Subtitle (Status pill removed per user request!)
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(
-                        text = "Game & Assets Minecraft",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                    Text(
-                        text = "Kelola instalasi aset resmi, perbaikan otomatis (Repair), atau hapus total aset",
-                        fontSize = 11.sp,
-                        color = MutedSubtitleText
-                    )
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = when {
-                        installStatus.ready -> Color(0xFF1E3E29)
-                        installStatus.running -> SubRailCapsuleActive
-                        else -> Color(0xFF3E3117)
-                    }
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        Icon(
-                            imageVector = when {
-                                installStatus.ready -> Icons.Default.CheckCircle
-                                installStatus.running -> Icons.Default.CloudDownload
-                                else -> Icons.Default.Info
-                            },
-                            contentDescription = null,
-                            tint = when {
-                                installStatus.ready -> Color(0xFF81C784)
-                                installStatus.running -> SkyBlueAccent
-                                else -> Color(0xFFFFD54F)
-                            },
-                            modifier = Modifier.size(14.dp)
-                        )
-                        Text(
-                            text = when {
-                                isRepairRunning -> "Memeriksa & Memperbaiki..."
-                                installStatus.ready -> "Siap Dimainkan (100%)"
-                                installStatus.paused -> "Dijeda (${installStatus.percent}%)"
-                                installStatus.running -> "Mengunduh (${installStatus.percent}%)"
-                                else -> "Belum Terpasang"
-                            },
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when {
-                                installStatus.ready -> Color(0xFF81C784)
-                                installStatus.running -> SkyBlueAccent
-                                else -> Color(0xFFFFD54F)
-                            }
-                        )
-                    }
-                }
+                Text(
+                    text = "Game & Assets Minecraft",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+                Text(
+                    text = "Kelola instalasi aset resmi, perbaikan otomatis (Repair), atau hapus total aset",
+                    fontSize = 11.sp,
+                    color = MutedSubtitleText
+                )
             }
 
             // Main Clean Version & Assets Card

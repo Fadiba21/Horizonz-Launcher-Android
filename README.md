@@ -10,7 +10,7 @@
 ### Official Android Fork of [`horizon-rust/horizon`](https://github.com/horizon-rust/horizon) • Minecraft: Java Edition `26.3` in 100% Rust
 
 <!-- VERSION_BADGE_START -->
-[![Release Version](https://img.shields.io/badge/HorizonZ_Launcher-v1.5-43A047?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
+[![Release Version](https://img.shields.io/badge/HorizonZ_Launcher-v1.6-43A047?style=for-the-badge&logo=android&logoColor=white)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
 <!-- VERSION_BADGE_END -->
 [![Upstream Engine](https://img.shields.io/badge/Upstream_Fork-horizon--rust%2Fhorizon_(26.3)-DEA584?style=for-the-badge&logo=rust&logoColor=black)](https://github.com/horizon-rust/horizon)
 [![Android Backend](https://img.shields.io/badge/Android_Runtime-Vasysik%2Fhorizon--android_(v0.7.6)-80D8FF?style=for-the-badge&logo=linux&logoColor=black)](https://github.com/Vasysik/horizon-android)
@@ -157,7 +157,7 @@ Every setting adjusted in the **HorizonZ Settings** screen is synchronized with 
 ## ✨ Key Features
 
 - 🦀 **100% Native Rust Engine (`26.3`)** — Powered by [`horizon-rust/horizon`](https://github.com/horizon-rust/horizon) and [`Vasysik/horizon-android`](https://github.com/Vasysik/horizon-android) (`v0.7.6`) for high FPS and low memory usage on Android.
-- 🎬 **Dashboard Trailer & RAM Allocation** — Includes an embedded YouTube trailer player and a configurable RAM allocation slider, with Android’s OS-managed limit as the default.
+- 🎬 **Dashboard Trailer & RAM Allocation** — Plays official `@Minecraft` YouTube trailers under five minutes, automatically hides captions, advances to the next trailer, and provides an animated three-dot menu; includes a RAM slider with **Free** and Android OS-managed limit modes.
 - 📱 **Strict ARM64 & ARM32 Support** — Native builds for 64-bit (`arm64-v8a` / `aarch64-linux-android`) and 32-bit (`armeabi-v7a` / `armv7-linux-androideabi`) Android devices running Android 9.0+ (`minSdk 28`, `targetSdk 35`).
 - 🛒 **Official `playhorizon.dev` Store** — Smart button states (`Installed ✓`, `Update ↑`, `Installing...`, `Cancel ✕`, `Incompatible`) synchronized in real time with the local Mods & Packs Manager.
 - 🧩 **Full Files & Mods Manager** — Manage **Mods (`.hmod`)**, **Saves (Worlds)**, **Resource Packs**, and **Shader Packs** with animated slide/fade transitions and confirmation dialogs before deletion.
@@ -170,9 +170,9 @@ Every setting adjusted in the **HorizonZ Settings** screen is synchronized with 
 ## 📥 Download & Installation
 
 <!-- LATEST_VERSION_START -->
-1. Go to the [**HorizonZ — Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases) page and download the latest **HorizonZ v1.5** APK matching your device architecture:
-   - **`HorizonZ-Launcher-1.5-arm64-v8a.apk`** — Recommended for modern 64-bit Android phones and tablets.
-   - **`HorizonZ-Launcher-1.5-armeabi-v7a.apk`** — For 32-bit ARMv7 Android devices.
+1. Go to the [**HorizonZ — Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases) page and download the latest **HorizonZ v1.6** APK matching your device architecture:
+   - **`HorizonZ-Launcher-1.6-arm64-v8a.apk`** — Recommended for modern 64-bit Android phones and tablets.
+   - **`HorizonZ-Launcher-1.6-armeabi-v7a.apk`** — For 32-bit ARMv7 Android devices.
 <!-- LATEST_VERSION_END -->
 2. Install the APK on your Android device (Android 9.0 Pie / API 28 or newer).
 3. Open **HorizonZ**, choose or create your player profile in **Account & Skins**, and optionally install native `.hmod` mods from the **Store** tab.
