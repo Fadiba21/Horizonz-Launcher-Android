@@ -233,14 +233,25 @@ data class ModPackageDetailInfo(
 
 enum class HorizonBackgroundMode(val serdeKey: String, val label: String) {
     WALLPAPER("wallpaper", "Static HD Minecraft Wallpaper (16:9)"),
-    YOUTUBE_TRAILER("youtube-trailer", "Auto-Play Minecraft YouTube Trailer (720p)")
+    YOUTUBE_TRAILER("youtube-trailer", "Auto-Play Minecraft YouTube Trailer")
 }
 
 data class MinecraftTrailerVideo(
     val videoId: String,
     val title: String,
     val publishedDate: String,
-    val watchUrl: String = "https://www.youtube.com/watch?v=$videoId"
+    val watchUrl: String = "https://www.youtube.com/watch?v=$videoId",
+    val directMp4Url: String = ""
+)
+
+data class SavedCustomSkinItem(
+    val id: String,
+    val fileName: String,
+    val displayName: String,
+    val filePath: String,
+    val slimModel: Boolean,
+    val sourceLabel: String = "Custom Skin",
+    val addedAt: Long = System.currentTimeMillis()
 )
 
 enum class ZalithThemePalette(val label: String, val primaryHex: Long, val secondaryHex: Long, val surfaceHex: Long) {
@@ -266,7 +277,8 @@ data class SkinDetectionResult(
     val skinFile: java.io.File?,
     val slimModel: Boolean,
     val sourceLabel: String,
-    val message: String
+    val message: String,
+    val savedFileName: String = ""
 )
 
 data class HorizonConfigState(

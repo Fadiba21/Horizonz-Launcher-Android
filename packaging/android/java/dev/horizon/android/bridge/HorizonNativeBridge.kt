@@ -187,7 +187,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "1.2"
+    const val INSTALLED_LAUNCHER_VERSION = "1.3"
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
     private val memoryLogs = ConcurrentLinkedDeque<String>()
@@ -207,14 +207,9 @@ object HorizonNativeBridge {
 
     val OFFICIAL_MINECRAFT_TRAILERS_FALLBACK = listOf(
         MinecraftTrailerVideo(
-            videoId = "UiPcEW_d9Io",
-            title = "Minecraft LIVE Official Trailer – September 2026",
-            publishedDate = "2026-09-22"
-        ),
-        MinecraftTrailerVideo(
-            videoId = "3ntfjZGgm04",
-            title = "Minecraft LIVE Official Trailer – March 2026",
-            publishedDate = "2026-03-10"
+            videoId = "MmB9b5njVbA",
+            title = "Official Minecraft Trailer",
+            publishedDate = "Official"
         ),
         MinecraftTrailerVideo(
             videoId = "jLuJbSjo7NA",
@@ -222,19 +217,145 @@ object HorizonNativeBridge {
             publishedDate = "2025-09-30"
         ),
         MinecraftTrailerVideo(
-            videoId = "1lWDHaqw-B4",
-            title = "Minecraft Live 2025: Announcement Trailer",
-            publishedDate = "2025-03-05"
+            videoId = "UiPcEW_d9Io",
+            title = "Minecraft LIVE Official Trailer",
+            publishedDate = "2026-09-22"
         ),
         MinecraftTrailerVideo(
-            videoId = "MmB9b5njVbA",
-            title = "Official Minecraft Trailer",
-            publishedDate = "Official"
+            videoId = "wJO_vIDZn-I",
+            title = "Minecraft | Official Trailer",
+            publishedDate = "2024-11-19"
         )
     )
 
     @Volatile
     private var cachedYoutubeTrailers: List<MinecraftTrailerVideo>? = null
+    private val trailerStreamCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * Resolves a direct 720p (itag=22) or 360p (itag=18) progressive MP4 video+audio stream URL
+     * for an official @Minecraft YouTube Trailer video ID using YouTube InnerTube `/youtubei/v1/player`
+     * (`ANDROID_VR` / `IOS` clients) and Piped/Invidious fallback APIs so Android WebView can play
+     * the trailer directly inside a native HTML5 `<video>` element without YouTube embed restrictions!
+     */
+    fun resolveDirectTrailerStreamUrl(videoId: String): String {
+        if (videoId.isBlank()) return ""
+        trailerStreamCache[videoId]?.let { if (it.isNotBlank()) return it }
+
+        // 1. Try YouTube InnerTube Player API (ANDROID_VR & IOS clients return progressive MP4 formats)
+        val innerTubeClients = listOf(
+            Triple("ANDROID_VR", "1.60.19", "com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip"),
+            Triple("IOS", "19.45.4", "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X;)")
+        )
+        for ((clientName, clientVer, ua) in innerTubeClients) {
+            try {
+                val conn = (URL("https://www.youtube.com/youtubei/v1/player?prettyPrint=false").openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 5500
+                    readTimeout = 6500
+                    setRequestProperty("Content-Type", "application/json")
+                    setRequestProperty("User-Agent", ua)
+                }
+                val payload = JSONObject().apply {
+                    put("videoId", videoId)
+                    put("contentCheckOk", true)
+                    put("racyCheckOk", true)
+                    put(
+                        "context",
+                        JSONObject().put(
+                            "client",
+                            JSONObject().apply {
+                                put("clientName", clientName)
+                                put("clientVersion", clientVer)
+                                put("hl", "en")
+                                put("gl", "US")
+                            }
+                        )
+                    )
+                }.toString()
+                conn.outputStream.use { it.write(payload.toByteArray(Charsets.UTF_8)) }
+                if (conn.responseCode == 200) {
+                    val respTxt = conn.inputStream.bufferedReader().use { it.readText() }
+                    val root = JSONObject(respTxt)
+                    val streamingData = root.optJSONObject("streamingData")
+                    val formats = streamingData?.optJSONArray("formats")
+                    if (formats != null) {
+                        var best720Url = ""
+                        var fallbackMp4Url = ""
+                        for (i in 0 until formats.length()) {
+                            val fmt = formats.optJSONObject(i) ?: continue
+                            val url = fmt.optString("url", "")
+                            val mime = fmt.optString("mimeType", "")
+                            val height = fmt.optInt("height", 0)
+                            val itag = fmt.optInt("itag", 0)
+                            if (url.startsWith("http") && mime.contains("video/mp4", ignoreCase = true)) {
+                                if (itag == 22 || height == 720) {
+                                    best720Url = url
+                                    break
+                                } else if (fallbackMp4Url.isEmpty()) {
+                                    fallbackMp4Url = url
+                                }
+                            }
+                        }
+                        val chosen = best720Url.ifEmpty { fallbackMp4Url }
+                        if (chosen.isNotEmpty()) {
+                            trailerStreamCache[videoId] = chosen
+                            return chosen
+                        }
+                    }
+                    val hlsUrl = streamingData?.optString("hlsManifestUrl", "").orEmpty()
+                    if (hlsUrl.startsWith("http")) {
+                        trailerStreamCache[videoId] = hlsUrl
+                        return hlsUrl
+                    }
+                }
+            } catch (ignored: Exception) {
+            }
+        }
+
+        // 2. Fallback: Try public Piped API endpoints for direct 720p MP4 stream
+        val pipedApis = listOf(
+            "https://pipedapi.kavin.rocks/streams/$videoId",
+            "https://pipedapi.tokhmi.xyz/streams/$videoId"
+        )
+        for (apiUrl in pipedApis) {
+            try {
+                val conn = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 5000
+                    readTimeout = 6000
+                    setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION")
+                }
+                if (conn.responseCode == 200) {
+                    val root = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                    val streams = root.optJSONArray("videoStreams")
+                    if (streams != null) {
+                        var bestUrl = ""
+                        for (i in 0 until streams.length()) {
+                            val s = streams.optJSONObject(i) ?: continue
+                            val videoOnly = s.optBoolean("videoOnly", true)
+                            val url = s.optString("url", "")
+                            val qual = s.optString("quality", "")
+                            if (!videoOnly && url.startsWith("http")) {
+                                if (qual.contains("720")) {
+                                    bestUrl = url
+                                    break
+                                } else if (bestUrl.isEmpty()) {
+                                    bestUrl = url
+                                }
+                            }
+                        }
+                        if (bestUrl.isNotEmpty()) {
+                            trailerStreamCache[videoId] = bestUrl
+                            return bestUrl
+                        }
+                    }
+                }
+            } catch (ignored: Exception) {
+            }
+        }
+        return ""
+    }
 
     /**
      * Automatically checks the official Minecraft YouTube Channel RSS/Atom feed
@@ -396,6 +517,7 @@ object HorizonNativeBridge {
             "profiles",
             "logs",
             "skins",
+            "skins/library",
             "screenshots",
             "backups",
             "custom_wallpapers",
@@ -567,11 +689,178 @@ object HorizonNativeBridge {
      * 3. If the image is a regular photo/picture (opaque non-UV image), runs our Smart Photo-to-Skin
      *    Generator that maps the photo's face & outfit palette onto a valid 64x64 Minecraft player UV net!
      */
+    /**
+     * Resolves the filename for a newly imported skin in `skins/library/`:
+     * - If `customNameRaw` is set by the user, uses `<customName>.png`.
+     * - If `customNameRaw` is blank, uses `default.png` if unused, then `default1.png`, `default2.png`, `default3.png`, etc.!
+     */
+    fun resolveNextSkinLibraryFileName(libraryDir: File, customNameRaw: String): String {
+        libraryDir.mkdirs()
+        val trimmed = customNameRaw.trim()
+        if (trimmed.isNotEmpty()) {
+            val base = trimmed.removeSuffix(".png").removeSuffix(".PNG")
+                .replace(Regex("[^a-zA-Z0-9._ -]"), "_")
+                .trim()
+                .ifEmpty { "default" }
+            return "$base.png"
+        }
+        val firstDefault = File(libraryDir, "default.png")
+        if (!firstDefault.exists()) {
+            return "default.png"
+        }
+        var idx = 1
+        while (File(libraryDir, "default$idx.png").exists()) {
+            idx++
+        }
+        return "default$idx.png"
+    }
+
+    fun loadSavedSkinLibrary(context: Context): List<SavedCustomSkinItem> {
+        val home = ensureHomeDirectories(context)
+        val libraryDir = File(home, "skins/library").apply { mkdirs() }
+        val metaFile = File(home, "zalith-skin-library.json")
+        val metaByFile = mutableMapOf<String, SavedCustomSkinItem>()
+        if (metaFile.isFile) {
+            runCatching {
+                val arr = JSONArray(metaFile.readText())
+                for (i in 0 until arr.length()) {
+                    val obj = arr.optJSONObject(i) ?: continue
+                    val fn = obj.optString("fileName", "")
+                    if (fn.isNotEmpty()) {
+                        metaByFile[fn] = SavedCustomSkinItem(
+                            id = obj.optString("id", fn),
+                            fileName = fn,
+                            displayName = obj.optString("displayName", fn),
+                            filePath = obj.optString("filePath", File(libraryDir, fn).absolutePath),
+                            slimModel = obj.optBoolean("slimModel", false),
+                            sourceLabel = obj.optString("sourceLabel", "Custom Skin"),
+                            addedAt = obj.optLong("addedAt", 0L)
+                        )
+                    }
+                }
+            }
+        }
+
+        val result = mutableListOf<SavedCustomSkinItem>()
+        val pngFiles = libraryDir.listFiles()?.filter { it.isFile && it.name.endsWith(".png", ignoreCase = true) && it.length() > 64L }.orEmpty()
+        for (f in pngFiles) {
+            val existing = metaByFile[f.name]
+            if (existing != null) {
+                result.add(existing.copy(filePath = f.absolutePath))
+            } else {
+                val decoded = BitmapFactory.decodeFile(f.absolutePath)
+                val slim = if (decoded != null && decoded.width == 64 && decoded.height == 64) detectSlimArmsFrom64x64(decoded) else false
+                result.add(
+                    SavedCustomSkinItem(
+                        id = f.name,
+                        fileName = f.name,
+                        displayName = f.name,
+                        filePath = f.absolutePath,
+                        slimModel = slim,
+                        sourceLabel = "Imported Skin (${f.name})",
+                        addedAt = f.lastModified()
+                    )
+                )
+            }
+        }
+        // Sort so default.png, default1.png, default2.png and newest custom skins appear cleanly in order
+        return result.sortedWith(
+            compareBy<SavedCustomSkinItem> { item ->
+                val n = item.fileName.lowercase(Locale.US)
+                when {
+                    n == "default.png" -> 0
+                    n.matches(Regex("default\d+\.png")) -> n.removePrefix("default").removeSuffix(".png").toIntOrNull() ?: 999
+                    else -> 1000
+                }
+            }.thenByDescending { it.addedAt }
+        )
+    }
+
+    private fun saveSkinLibraryMetadata(context: Context, items: List<SavedCustomSkinItem>) {
+        runCatching {
+            val home = ensureHomeDirectories(context)
+            val metaFile = File(home, "zalith-skin-library.json")
+            val arr = JSONArray()
+            for (item in items) {
+                arr.put(
+                    JSONObject().apply {
+                        put("id", item.id)
+                        put("fileName", item.fileName)
+                        put("displayName", item.displayName)
+                        put("filePath", item.filePath)
+                        put("slimModel", item.slimModel)
+                        put("sourceLabel", item.sourceLabel)
+                        put("addedAt", item.addedAt)
+                    }
+                )
+            }
+            metaFile.writeText(arr.toString(2))
+        }
+    }
+
+    fun applySavedCustomSkin(
+        context: Context,
+        item: SavedCustomSkinItem,
+        account: ZalithAccount,
+        config: HorizonConfigState
+    ): ZalithAccount {
+        val skinFile = File(item.filePath)
+        if (skinFile.isFile) {
+            syncActiveSkinToGameEngine(context, skinFile, item.slimModel, config.profile, config.enableSystemLog)
+        }
+        return account.copy(
+            skinPath = skinFile.absolutePath,
+            slimSkinModel = item.slimModel,
+            skinSourceLabel = item.fileName
+        )
+    }
+
+    fun renameSavedCustomSkin(
+        context: Context,
+        item: SavedCustomSkinItem,
+        newNameRaw: String
+    ): SavedCustomSkinItem? {
+        val home = ensureHomeDirectories(context)
+        val libraryDir = File(home, "skins/library").apply { mkdirs() }
+        val oldFile = File(item.filePath)
+        if (!oldFile.isFile) return null
+
+        val newFileName = resolveNextSkinLibraryFileName(libraryDir, newNameRaw)
+        val newFile = File(libraryDir, newFileName)
+        if (newFile.absolutePath != oldFile.absolutePath) {
+            if (newFile.exists()) {
+                Toast.makeText(context, "Nama skin '$newFileName' sudah dipakai.", Toast.LENGTH_SHORT).show()
+                return null
+            }
+            if (!oldFile.renameTo(newFile)) return null
+        }
+        val updatedItem = item.copy(
+            id = newFileName,
+            fileName = newFileName,
+            displayName = newFileName,
+            filePath = newFile.absolutePath
+        )
+        val all = loadSavedSkinLibrary(context).map {
+            if (it.fileName == item.fileName || it.fileName == newFileName) updatedItem else it
+        }
+        saveSkinLibraryMetadata(context, all)
+        return updatedItem
+    }
+
+    fun deleteSavedCustomSkin(context: Context, item: SavedCustomSkinItem): Boolean {
+        val f = File(item.filePath)
+        val ok = if (f.exists()) f.delete() else true
+        val remaining = loadSavedSkinLibrary(context).filterNot { it.fileName == item.fileName }
+        saveSkinLibraryMetadata(context, remaining)
+        return ok
+    }
+
     fun detectAndImportSkinFromUri(
         context: Context,
         uri: Uri,
         account: ZalithAccount,
-        config: HorizonConfigState
+        config: HorizonConfigState,
+        customSkinName: String = ""
     ): SkinDetectionResult {
         return try {
             val rawBmp = context.contentResolver.openInputStream(uri)?.use { input ->
@@ -580,23 +869,22 @@ object HorizonNativeBridge {
 
             val w = rawBmp.width
             val h = rawBmp.height
-            val skinsDir = File(ensureHomeDirectories(context), "skins").apply { mkdirs() }
-            val outFile = File(skinsDir, "skin_${account.id}_${System.currentTimeMillis()}.png")
+            val home = ensureHomeDirectories(context)
+            val libraryDir = File(home, "skins/library").apply { mkdirs() }
+            val savedFileName = resolveNextSkinLibraryFileName(libraryDir, customSkinName)
+            val outFile = File(libraryDir, savedFileName)
 
             val finalBitmap: Bitmap
             val detectedSlim: Boolean
-            val sourceLabel: String
-            val detailMsg: String
+            val typeTag: String
 
             // Check if image is a 2:1 legacy Minecraft skin (e.g., 64x32, 128x64)
             if (w == h * 2 && w >= 64 && isLikelyUvSkin(rawBmp, isLegacy = true)) {
                 val scaled32 = Bitmap.createScaledBitmap(rawBmp, 64, 32, false)
                 finalBitmap = normalizeAndCleanSkin64x64(convertLegacy64x32To64x64(scaled32))
                 detectedSlim = detectSlimArmsFrom64x64(finalBitmap)
-                sourceLabel = "Legacy Skin 64×32 → 64×64"
-                detailMsg = "Skin Legacy (${w}×${h}) berhasil diimpor & dikonversi ke 64×64!"
+                typeTag = "Legacy 64×32 → 64×64"
             } else if (w == h && w >= 64 && isLikelyUvSkin(rawBmp, isLegacy = false)) {
-                // Standard 64x64 or HD square Minecraft UV skin (including RGB JPEG skins like 413890.png!)
                 val scaled64 = if (w == 64 && h == 64) {
                     rawBmp.copy(Bitmap.Config.ARGB_8888, true)
                 } else {
@@ -604,28 +892,40 @@ object HorizonNativeBridge {
                 }
                 finalBitmap = normalizeAndCleanSkin64x64(scaled64)
                 detectedSlim = detectSlimArmsFrom64x64(finalBitmap)
-                val modelName = if (detectedSlim) "Slim (3px Alex)" else "Wide (4px Steve)"
-                sourceLabel = "Custom Skin (${w}×${h})"
-                detailMsg = "Skin Minecraft (${w}×${h}) berhasil diimpor! Model lengan: $modelName."
+                typeTag = "Minecraft Skin (${w}×${h})"
             } else {
-                // Regular Photo / Portrait -> Smart Photo-to-Minecraft-Skin Generator!
                 finalBitmap = convertRegularPhotoToMinecraftSkin64x64(rawBmp, account.slimSkinModel)
                 detectedSlim = account.slimSkinModel
-                sourceLabel = "Photo-to-Skin (${w}×${h} → 64×64)"
-                detailMsg = "Foto (${w}×${h}) berhasil dideteksi & diubah menjadi Skin Minecraft 64×64!"
+                typeTag = "Photo-to-Skin (${w}×${h})"
             }
 
             FileOutputStream(outFile).use { fos ->
                 finalBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos)
             }
 
+            val newItem = SavedCustomSkinItem(
+                id = savedFileName,
+                fileName = savedFileName,
+                displayName = savedFileName,
+                filePath = outFile.absolutePath,
+                slimModel = detectedSlim,
+                sourceLabel = typeTag,
+                addedAt = System.currentTimeMillis()
+            )
+            val updatedLibrary = loadSavedSkinLibrary(context).filterNot { it.fileName == savedFileName } + newItem
+            saveSkinLibraryMetadata(context, updatedLibrary)
+
+            val modelName = if (detectedSlim) "Slim (3px Alex)" else "Wide (4px Steve)"
+            val detailMsg = "Skin '$savedFileName' ($typeTag • $modelName) berhasil diimpor & disimpan ke Pilih Skin!"
+
             syncActiveSkinToGameEngine(context, outFile, detectedSlim, config.profile, config.enableSystemLog)
             SkinDetectionResult(
                 success = true,
                 skinFile = outFile,
                 slimModel = detectedSlim,
-                sourceLabel = sourceLabel,
-                message = detailMsg
+                sourceLabel = savedFileName,
+                message = detailMsg,
+                savedFileName = savedFileName
             )
         } catch (e: Exception) {
             appendSystemLog("Skin detection error: ${e.message}", config.enableSystemLog, context)

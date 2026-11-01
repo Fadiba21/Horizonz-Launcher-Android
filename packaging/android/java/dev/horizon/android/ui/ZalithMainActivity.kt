@@ -29,6 +29,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -54,11 +55,18 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import kotlin.math.cos
+import kotlin.math.roundToInt
+import kotlin.math.sin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -852,6 +860,241 @@ fun MinecraftSkinFullBodyCanvas(
     }
 }
 
+private data class Skin3DQuad(
+    val x0: Float, val y0: Float,
+    val x1: Float, val y1: Float,
+    val x2: Float, val y2: Float,
+    val x3: Float, val y3: Float,
+    val zDepth: Float,
+    val colorArgb: Int
+)
+
+@Composable
+fun MinecraftSkin3DPreviewCanvas(
+    skinBitmap: Bitmap,
+    slimArms: Boolean,
+    autoRotate: Boolean,
+    walkAnimation: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val pixels = remember(skinBitmap) {
+        val scaled = if (skinBitmap.width == 64 && skinBitmap.height == 64) {
+            skinBitmap
+        } else {
+            Bitmap.createScaledBitmap(skinBitmap, 64, 64, false)
+        }
+        val arr = IntArray(64 * 64)
+        scaled.getPixels(arr, 0, 64, 0, 0, 64, 64)
+        arr
+    }
+
+    var yawDeg by remember { mutableFloatStateOf(-28f) }
+    var pitchDeg by remember { mutableFloatStateOf(12f) }
+    var walkTick by remember { mutableFloatStateOf(0f) }
+
+    LaunchedEffect(autoRotate, walkAnimation) {
+        while (autoRotate || walkAnimation) {
+            delay(16L)
+            if (autoRotate) {
+                yawDeg = (yawDeg + 1.15f) % 360f
+            }
+            if (walkAnimation) {
+                walkTick = (walkTick + 0.11f) % (Math.PI.toFloat() * 2f)
+            }
+        }
+    }
+
+    val reusablePath = remember { Path() }
+
+    Canvas(
+        modifier = modifier.pointerInput(Unit) {
+            detectDragGestures { change, dragAmount ->
+                change.consume()
+                yawDeg = (yawDeg + dragAmount.x * 0.65f) % 360f
+                pitchDeg = (pitchDeg + dragAmount.y * 0.38f).coerceIn(-40f, 40f)
+            }
+        }
+    ) {
+        val w = size.width
+        val h = size.height
+        val scale = minOf(w / 24f, h / 38f)
+        val centerX = w * 0.5f
+        val centerY = h * 0.5f
+
+        drawOval(
+            color = Color.Black.copy(alpha = 0.45f),
+            topLeft = Offset(centerX - 6.5f * scale, centerY + 14.2f * scale),
+            size = Size(13f * scale, 3.2f * scale)
+        )
+
+        val yawRad = Math.toRadians(yawDeg.toDouble()).toFloat()
+        val pitchRad = Math.toRadians(pitchDeg.toDouble()).toFloat()
+        val cosY = cos(yawRad)
+        val sinY = sin(yawRad)
+        val cosP = cos(pitchRad)
+        val sinP = sin(pitchRad)
+
+        val quads = ArrayList<Skin3DQuad>(1600)
+
+        fun shadeColor(argb: Int, factor: Float): Int {
+            val a = (argb ushr 24) and 0xFF
+            val r = (((argb ushr 16) and 0xFF) * factor).roundToInt().coerceIn(0, 255)
+            val g = (((argb ushr 8) and 0xFF) * factor).roundToInt().coerceIn(0, 255)
+            val b = ((argb and 0xFF) * factor).roundToInt().coerceIn(0, 255)
+            return (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+
+        fun transformPoint(
+            lx: Float, ly: Float, lz: Float,
+            pivX: Float, pivY: Float, pivZ: Float,
+            rotXRad: Float
+        ): FloatArray {
+            val cosR = cos(rotXRad)
+            val sinR = sin(rotXRad)
+            val ry = ly * cosR - lz * sinR
+            val rz = ly * sinR + lz * cosR
+            val wx = pivX + lx
+            val wy = pivY + ry
+            val wz = pivZ + rz
+
+            val x1 = wx * cosY + wz * sinY
+            val z1 = -wx * sinY + wz * cosY
+            val y2 = wy * cosP - z1 * sinP
+            val z2 = wy * sinP + z1 * cosP
+
+            val fov = 68f
+            val persp = fov / (fov - z2).coerceAtLeast(20f)
+            val sx = centerX + x1 * scale * persp
+            val sy = centerY + y2 * scale * persp
+            return floatArrayOf(sx, sy, z2)
+        }
+
+        fun emitFaceGrid(
+            p00: FloatArray, p10: FloatArray, p11: FloatArray, p01: FloatArray,
+            uStart: Int, vStart: Int, uWidth: Int, vHeight: Int,
+            shade: Float, isOverlay: Boolean
+        ) {
+            val ux = p10[0] - p00[0]
+            val uy = p10[1] - p00[1]
+            val vx = p01[0] - p00[0]
+            val vy = p01[1] - p00[1]
+            if (ux * vy - uy * vx <= 0f && !isOverlay) return
+
+            val invW = 1f / uWidth.toFloat()
+            val invH = 1f / vHeight.toFloat()
+            val zBias = if (isOverlay) 0.18f else 0f
+
+            for (gy in 0 until vHeight) {
+                val ty0 = gy * invH
+                val ty1 = (gy + 1) * invH
+                val vTex = (vStart + gy).coerceIn(0, 63)
+                for (gx in 0 until uWidth) {
+                    val uTex = (uStart + gx).coerceIn(0, 63)
+                    val rawArgb = pixels[vTex * 64 + uTex]
+                    val alpha = (rawArgb ushr 24) and 0xFF
+                    if (alpha < 24) continue
+                    val finalArgb = shadeColor(rawArgb or (0xFF shl 24), shade)
+
+                    val tx0 = gx * invW
+                    val tx1 = (gx + 1) * invW
+
+                    fun bilerpX(tx: Float, ty: Float): Float {
+                        val top = p00[0] + (p10[0] - p00[0]) * tx
+                        val bot = p01[0] + (p11[0] - p01[0]) * tx
+                        return top + (bot - top) * ty
+                    }
+                    fun bilerpY(tx: Float, ty: Float): Float {
+                        val top = p00[1] + (p10[1] - p00[1]) * tx
+                        val bot = p01[1] + (p11[1] - p01[1]) * tx
+                        return top + (bot - top) * ty
+                    }
+                    fun bilerpZ(tx: Float, ty: Float): Float {
+                        val top = p00[2] + (p10[2] - p00[2]) * tx
+                        val bot = p01[2] + (p11[2] - p01[2]) * tx
+                        return top + (bot - top) * ty
+                    }
+
+                    val x0 = bilerpX(tx0, ty0)
+                    val y0 = bilerpY(tx0, ty0)
+                    val x1 = bilerpX(tx1, ty0)
+                    val y1 = bilerpY(tx1, ty0)
+                    val x2 = bilerpX(tx1, ty1)
+                    val y2 = bilerpY(tx1, ty1)
+                    val x3 = bilerpX(tx0, ty1)
+                    val y3 = bilerpY(tx0, ty1)
+                    val zAvg = bilerpZ((tx0 + tx1) * 0.5f, (ty0 + ty1) * 0.5f) + zBias
+
+                    quads.add(Skin3DQuad(x0, y0, x1, y1, x2, y2, x3, y3, zAvg, finalArgb))
+                }
+            }
+        }
+
+        fun emitBox(
+            pivX: Float, pivY: Float, pivZ: Float,
+            xMin: Float, yMin: Float, zMin: Float,
+            xMax: Float, yMax: Float, zMax: Float,
+            rotXRad: Float,
+            uOrigin: Int, vOrigin: Int,
+            texW: Int, texH: Int, texD: Int,
+            isOverlay: Boolean
+        ) {
+            val ftl = transformPoint(xMin, yMin, zMax, pivX, pivY, pivZ, rotXRad)
+            val ftr = transformPoint(xMax, yMin, zMax, pivX, pivY, pivZ, rotXRad)
+            val fbr = transformPoint(xMax, yMax, zMax, pivX, pivY, pivZ, rotXRad)
+            val fbl = transformPoint(xMin, yMax, zMax, pivX, pivY, pivZ, rotXRad)
+
+            val btl = transformPoint(xMin, yMin, zMin, pivX, pivY, pivZ, rotXRad)
+            val btr = transformPoint(xMax, yMin, zMin, pivX, pivY, pivZ, rotXRad)
+            val bbr = transformPoint(xMax, yMax, zMin, pivX, pivY, pivZ, rotXRad)
+            val bbl = transformPoint(xMin, yMax, zMin, pivX, pivY, pivZ, rotXRad)
+
+            emitFaceGrid(ftl, ftr, fbr, fbl, uOrigin + texD, vOrigin + texD, texW, texH, 1.0f, isOverlay)
+            emitFaceGrid(btr, btl, bbl, bbr, uOrigin + texD * 2 + texW, vOrigin + texD, texW, texH, 0.74f, isOverlay)
+            emitFaceGrid(btl, ftl, fbl, bbl, uOrigin, vOrigin + texD, texD, texH, 0.84f, isOverlay)
+            emitFaceGrid(ftr, btr, bbr, fbr, uOrigin + texD + texW, vOrigin + texD, texD, texH, 0.82f, isOverlay)
+            emitFaceGrid(btl, btr, ftr, ftl, uOrigin + texD, vOrigin, texW, texD, 1.06f, isOverlay)
+            emitFaceGrid(fbl, fbr, bbr, bbl, uOrigin + texD + texW, vOrigin, texW, texD, 0.62f, isOverlay)
+        }
+
+        val swingAngle = if (walkAnimation) sin(walkTick) * 0.42f else 0.14f
+        val armW = if (slimArms) 3 else 4
+        val armWf = armW.toFloat()
+
+        emitBox(0f, -8f, 0f, -4f, -8f, -4f, 4f, 0f, 4f, 0f, 0, 0, 8, 8, 8, false)
+        emitBox(0f, -8f, 0f, -4.35f, -8.35f, -4.35f, 4.35f, 0.35f, 4.35f, 0f, 32, 0, 8, 8, 8, true)
+
+        emitBox(0f, -8f, 0f, -4f, 0f, -2f, 4f, 12f, 2f, 0f, 16, 16, 8, 12, 4, false)
+        emitBox(0f, -8f, 0f, -4.25f, -0.25f, -2.25f, 4.25f, 12.25f, 2.25f, 0f, 16, 32, 8, 12, 4, true)
+
+        val rArmPivX = -4f - armWf * 0.5f
+        emitBox(rArmPivX, -6f, 0f, -armWf * 0.5f, -2f, -2f, armWf * 0.5f, 10f, 2f, swingAngle, 40, 16, armW, 12, 4, false)
+        emitBox(rArmPivX, -6f, 0f, -armWf * 0.5f - 0.25f, -2.25f, -2.25f, armWf * 0.5f + 0.25f, 10.25f, 2.25f, swingAngle, 40, 32, armW, 12, 4, true)
+
+        val lArmPivX = 4f + armWf * 0.5f
+        emitBox(lArmPivX, -6f, 0f, -armWf * 0.5f, -2f, -2f, armWf * 0.5f, 10f, 2f, -swingAngle, 32, 48, armW, 12, 4, false)
+        emitBox(lArmPivX, -6f, 0f, -armWf * 0.5f - 0.25f, -2.25f, -2.25f, armWf * 0.5f + 0.25f, 10.25f, 2.25f, -swingAngle, 48, 48, armW, 12, 4, true)
+
+        emitBox(-2f, 4f, 0f, -2f, 0f, -2f, 2f, 12f, 2f, -swingAngle * 0.85f, 0, 16, 4, 12, 4, false)
+        emitBox(-2f, 4f, 0f, -2.25f, -0.25f, -2.25f, 2.25f, 12.25f, 2.25f, -swingAngle * 0.85f, 0, 32, 4, 12, 4, true)
+
+        emitBox(2f, 4f, 0f, -2f, 0f, -2f, 2f, 12f, 2f, swingAngle * 0.85f, 16, 48, 4, 12, 4, false)
+        emitBox(2f, 4f, 0f, -2.25f, -0.25f, -2.25f, 2.25f, 12.25f, 2.25f, swingAngle * 0.85f, 0, 48, 4, 12, 4, true)
+
+        quads.sortBy { it.zDepth }
+
+        for (i in 0 until quads.size) {
+            val q = quads[i]
+            reusablePath.reset()
+            reusablePath.moveTo(q.x0, q.y0)
+            reusablePath.lineTo(q.x1, q.y1)
+            reusablePath.lineTo(q.x2, q.y2)
+            reusablePath.lineTo(q.x3, q.y3)
+            reusablePath.close()
+            drawPath(path = reusablePath, color = Color(q.colorArgb))
+        }
+    }
+}
+
 /**
  * Zalith-style Settings Dropdown Card (`429668.jpg` style):
  * Full-width dark slate rounded card with Title, Description subtitle, `Selected: <value>`, and right dropdown arrow.
@@ -1287,6 +1530,7 @@ fun ZalithCleanLauncherScreen(
     var installStatus by remember { mutableStateOf<AssetInstallStatus>(HorizonNativeBridge.pollInstallProgress(context, config.enableSystemLog)) }
     var skinDetectionBanner by remember { mutableStateOf<String?>(null) }
     var skinReloadCounter by remember { mutableIntStateOf(0) }
+    var pendingCustomSkinName by remember { mutableStateOf("") }
 
     // Cache the active account's 64x64 skin bitmap for instant rendering on Dashboard & Skin Studio
     val activeSkinBitmap = remember(activeAccount.id, activeAccount.skinPath, activeAccount.slimSkinModel, skinReloadCounter) {
@@ -1296,7 +1540,8 @@ fun ZalithCleanLauncherScreen(
     // Hoisted skinPicker at root screen level so it is NEVER disposed when Google Photos / File Picker opens!
     val skinPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            val res = HorizonNativeBridge.detectAndImportSkinFromUri(context, uri, activeAccount, config)
+            val res = HorizonNativeBridge.detectAndImportSkinFromUri(context, uri, activeAccount, config, pendingCustomSkinName)
+            pendingCustomSkinName = ""
             if (res.success && res.skinFile != null) {
                 val updatedList = accounts.map { acc ->
                     if (acc.id == activeAccount.id) {
@@ -1472,6 +1717,9 @@ fun ZalithCleanLauncherScreen(
                                     activeSkinBitmap = activeSkinBitmap,
                                     config = config,
                                     detectionBanner = skinDetectionBanner,
+                                    customSkinNameInput = pendingCustomSkinName,
+                                    onCustomSkinNameChange = { pendingCustomSkinName = it },
+                                    skinReloadCounter = skinReloadCounter,
                                     onLaunchSkinPicker = { skinPicker.launch("image/*") },
                                     onUpdateBanner = { skinDetectionBanner = it },
                                     onSkinUpdated = { skinReloadCounter += 1 },
@@ -1739,12 +1987,15 @@ private fun ZalithIconRail(
 @Composable
 private fun MinecraftTrailerVideoWallpaperPlayer(
     videoId: String,
+    directStreamUrl: String,
+    trailerTitle: String,
     isMuted: Boolean,
     isPaused: Boolean,
     onVideoEndedOrError: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val htmlContent = remember(videoId) {
+    val safeStreamUrl = directStreamUrl.replace("'", "\\'")
+    val htmlContent = remember(videoId, directStreamUrl) {
         """
         <!DOCTYPE html>
         <html>
@@ -1753,81 +2004,167 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
         <style>
           html, body {
             margin: 0; padding: 0; width: 100%; height: 100%;
-            background-color: #000000; overflow: hidden;
+            background-color: #0B0F14; overflow: hidden;
           }
-          #player-wrap {
-            position: absolute; top: -6%; left: -6%; width: 112%; height: 112%;
+          #cinematic-canvas {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 1;
+          }
+          #direct-video {
+            position: absolute; top: -4%; left: -4%; width: 108%; height: 108%;
+            object-fit: cover; z-index: 2; opacity: 0;
+            transition: opacity 0.55s ease-in-out;
             pointer-events: none;
-          }
-          iframe {
-            width: 100%; height: 100%; border: 0;
           }
         </style>
         </head>
         <body>
-          <div id="player-wrap"><div id="player"></div></div>
-          <script src="https://www.youtube.com/iframe_api"></script>
+          <canvas id="cinematic-canvas" width="1280" height="720"></canvas>
+          <video id="direct-video" autoplay playsinline preload="auto"></video>
           <script>
-            var player;
-            var initialMuted = ${if (isMuted) "true" else "false"};
-            function onYouTubeIframeAPIReady() {
-              player = new YT.Player('player', {
-                width: '100%',
-                height: '100%',
-                videoId: '$videoId',
-                playerVars: {
-                  'autoplay': 1,
-                  'controls': 0,
-                  'rel': 0,
-                  'showinfo': 0,
-                  'modestbranding': 1,
-                  'iv_load_policy': 3,
-                  'fs': 0,
-                  'playsinline': 1,
-                  'vq': 'hd720'
-                },
-                events: {
-                  'onReady': function(event) {
-                    event.target.setPlaybackQuality('hd720');
-                    if (initialMuted) {
-                      event.target.mute();
-                    } else {
-                      event.target.unMute();
-                      event.target.setVolume(100);
-                    }
-                    event.target.playVideo();
-                  },
-                  'onStateChange': function(event) {
-                    if (event.data === YT.PlayerState.PLAYING) {
-                      event.target.setPlaybackQuality('hd720');
-                    } else if (event.data === YT.PlayerState.ENDED) {
-                      window.location.href = 'horizonz://trailer-ended';
-                    }
-                  },
-                  'onError': function(event) {
-                    window.location.href = 'horizonz://trailer-error';
-                  }
-                }
-              });
+            var isMutedState = ${if (isMuted) "true" else "false"};
+            var isPausedState = ${if (isPaused) "true" else "false"};
+            var directStream = '$safeStreamUrl';
+            var vidEl = document.getElementById('direct-video');
+            var canvas = document.getElementById('cinematic-canvas');
+            var ctx = canvas.getContext('2d');
+
+            var frameFiles = [
+              'file:///android_res/drawable/mc_wall_01.jpg',
+              'file:///android_res/drawable/mc_wall_02.jpg',
+              'file:///android_res/drawable/mc_wall_03.jpg',
+              'file:///android_res/drawable/mc_wall_04.jpg',
+              'file:///android_res/drawable/mc_wall_05.jpg',
+              'file:///android_res/drawable/mc_wall_06.jpg',
+              'file:///android_res/drawable/mc_wall_12.jpg',
+              'file:///android_res/drawable/mc_wall_13.jpg'
+            ];
+            var loadedImgs = [];
+            for (var i = 0; i < frameFiles.length; i++) {
+              var im = new Image();
+              im.src = frameFiles[i];
+              loadedImgs.push(im);
             }
-            function setHorizonMuted(muteFlag) {
-              initialMuted = muteFlag;
-              if (player && player.mute && player.unMute) {
-                if (muteFlag) {
-                  player.mute();
-                } else {
-                  player.unMute();
-                  if (player.setVolume) player.setVolume(100);
+
+            var audioCtx = null;
+            var directVideoPlaying = false;
+            var chordNotes = [
+              [261.63, 329.63, 392.00, 493.88],
+              [220.00, 261.63, 329.63, 392.00],
+              [174.61, 220.00, 261.63, 349.23],
+              [196.00, 246.94, 293.66, 392.00]
+            ];
+            var chordIdx = 0;
+
+            function playAmbientChord() {
+              if (isMutedState || isPausedState || directVideoPlaying) return;
+              try {
+                if (!audioCtx) {
+                  var AC = window.AudioContext || window.webkitAudioContext;
+                  if (AC) audioCtx = new AC();
                 }
+                if (!audioCtx) return;
+                if (audioCtx.state === 'suspended') audioCtx.resume();
+                var now = audioCtx.currentTime;
+                var notes = chordNotes[chordIdx % chordNotes.length];
+                chordIdx++;
+                for (var n = 0; n < notes.length; n++) {
+                  var osc = audioCtx.createOscillator();
+                  var gain = audioCtx.createGain();
+                  osc.type = (n % 2 === 0) ? 'sine' : 'triangle';
+                  osc.frequency.setValueAtTime(notes[n], now + n * 0.18);
+                  gain.gain.setValueAtTime(0.0001, now + n * 0.18);
+                  gain.gain.exponentialRampToValueAtTime(0.035, now + n * 0.18 + 0.45);
+                  gain.gain.exponentialRampToValueAtTime(0.0001, now + n * 0.18 + 2.6);
+                  osc.connect(gain);
+                  gain.connect(audioCtx.destination);
+                  osc.start(now + n * 0.18);
+                  osc.stop(now + n * 0.18 + 2.7);
+                }
+              } catch (e) {}
+            }
+
+            setInterval(playAmbientChord, 2800);
+
+            var startTime = performance.now();
+            function renderCinematicTrailer(now) {
+              if (!isPausedState && !directVideoPlaying) {
+                var elapsed = (now - startTime) / 1000.0;
+                var sceneDuration = 4.5;
+                var totalScenes = loadedImgs.length;
+                var sceneFloat = elapsed / sceneDuration;
+                var idxA = Math.floor(sceneFloat) % totalScenes;
+                var idxB = (idxA + 1) % totalScenes;
+                var frac = sceneFloat - Math.floor(sceneFloat);
+
+                ctx.fillStyle = '#0B0F14';
+                ctx.fillRect(0, 0, 1280, 720);
+
+                var imgA = loadedImgs[idxA];
+                var imgB = loadedImgs[idxB];
+                if (imgA && imgA.complete && imgA.naturalWidth > 0) {
+                  var zoomA = 1.04 + frac * 0.10;
+                  var panXA = Math.sin(idxA * 1.7) * 28 * frac;
+                  var panYA = Math.cos(idxA * 1.3) * 16 * frac;
+                  var wA = 1280 * zoomA;
+                  var hA = 720 * zoomA;
+                  ctx.globalAlpha = 1.0;
+                  ctx.drawImage(imgA, (1280 - wA) * 0.5 + panXA, (720 - hA) * 0.5 + panYA, wA, hA);
+                }
+                if (frac > 0.75 && imgB && imgB.complete && imgB.naturalWidth > 0) {
+                  var alphaB = (frac - 0.75) / 0.25;
+                  var zoomB = 1.04;
+                  var wB = 1280 * zoomB;
+                  var hB = 720 * zoomB;
+                  ctx.globalAlpha = alphaB;
+                  ctx.drawImage(imgB, (1280 - wB) * 0.5, (720 - hB) * 0.5, wB, hB);
+                }
+                ctx.globalAlpha = 1.0;
+              }
+              requestAnimationFrame(renderCinematicTrailer);
+            }
+            requestAnimationFrame(renderCinematicTrailer);
+
+            if (directStream && directStream.indexOf('http') === 0) {
+              vidEl.src = directStream;
+              vidEl.muted = isMutedState;
+              vidEl.volume = 1.0;
+              vidEl.onplaying = function() {
+                directVideoPlaying = true;
+                vidEl.style.opacity = '1';
+              };
+              vidEl.onended = function() {
+                window.location.href = 'horizonz://trailer-ended';
+              };
+              vidEl.onerror = function() {
+                directVideoPlaying = false;
+                vidEl.style.opacity = '0';
+              };
+              var p = vidEl.play();
+              if (p && p.catch) {
+                p.catch(function() {
+                  vidEl.muted = true;
+                  vidEl.play();
+                });
               }
             }
+
+            function setHorizonMuted(muteFlag) {
+              isMutedState = muteFlag;
+              if (vidEl) {
+                vidEl.muted = muteFlag;
+                if (!muteFlag) vidEl.volume = 1.0;
+              }
+              if (!muteFlag && !directVideoPlaying) {
+                playAmbientChord();
+              }
+            }
+
             function setHorizonPaused(pauseFlag) {
-              if (player && player.pauseVideo && player.playVideo) {
-                if (pauseFlag) {
-                  player.pauseVideo();
-                } else {
-                  player.playVideo();
-                }
+              isPausedState = pauseFlag;
+              if (vidEl && directVideoPlaying) {
+                if (pauseFlag) vidEl.pause();
+                else vidEl.play();
               }
             }
           </script>
@@ -1888,6 +2225,7 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                     javaScriptEnabled = true
                     mediaPlaybackRequiresUserGesture = false
                     domStorageEnabled = true
+                    allowFileAccess = true
                     loadsImagesAutomatically = true
                     cacheMode = WebSettings.LOAD_DEFAULT
                     mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
@@ -1903,15 +2241,17 @@ private fun MinecraftTrailerVideoWallpaperPlayer(
                         return false
                     }
                 }
-                tag = videoId
-                loadDataWithBaseURL("https://www.youtube.com", htmlContent, "text/html", "utf-8", null)
+                val keyTag = "$videoId|$directStreamUrl"
+                tag = keyTag
+                loadDataWithBaseURL("file:///android_res/drawable/", htmlContent, "text/html", "utf-8", null)
                 webViewRef = this
             }
         },
         update = { wv ->
-            if (wv.tag != videoId) {
-                wv.tag = videoId
-                wv.loadDataWithBaseURL("https://www.youtube.com", htmlContent, "text/html", "utf-8", null)
+            val keyTag = "$videoId|$directStreamUrl"
+            if (wv.tag != keyTag) {
+                wv.tag = keyTag
+                wv.loadDataWithBaseURL("file:///android_res/drawable/", htmlContent, "text/html", "utf-8", null)
             }
         }
     )
@@ -1938,6 +2278,7 @@ private fun CleanHomeViewport(
     val isVideoMode = config.useYoutubeTrailerWallpaper || config.backgroundMode == HorizonBackgroundMode.YOUTUBE_TRAILER
     var trailerList by remember { mutableStateOf(HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK) }
     var currentTrailerIndex by remember { mutableIntStateOf(0) }
+    var activeDirectStreamUrl by remember { mutableStateOf("") }
 
     LaunchedEffect(isVideoMode) {
         if (isVideoMode) {
@@ -1953,6 +2294,16 @@ private fun CleanHomeViewport(
 
     val activeTrailer = trailerList.getOrElse(currentTrailerIndex % trailerList.size.coerceAtLeast(1)) {
         HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK.first()
+    }
+
+    LaunchedEffect(isVideoMode, activeTrailer.videoId) {
+        if (isVideoMode) {
+            activeDirectStreamUrl = ""
+            val resolved = withContext(Dispatchers.IO) {
+                HorizonNativeBridge.resolveDirectTrailerStreamUrl(activeTrailer.videoId)
+            }
+            activeDirectStreamUrl = resolved
+        }
     }
 
     val wallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -1972,7 +2323,6 @@ private fun CleanHomeViewport(
         }
     }
 
-    // Only rotate static wallpapers when Video Mode is OFF and Launcher is NOT hibernated!
     LaunchedEffect(totalCount, isHibernated, isVideoMode) {
         while (!isHibernated && !isVideoMode) {
             delay(5000L)
@@ -1980,8 +2330,8 @@ private fun CleanHomeViewport(
         }
     }
 
-    LaunchedEffect(isHibernated) {
-        while (!isHibernated) {
+    LaunchedEffect(isHibernated, isVideoMode) {
+        while (!isHibernated && !isVideoMode) {
             delay(5000L)
             var next = (MINECRAFT_SPLASH_QUOTES.indices).random()
             if (next == quoteIndex) {
@@ -1991,60 +2341,83 @@ private fun CleanHomeViewport(
         }
     }
 
+    val titleScale by animateFloatAsState(
+        targetValue = if (isVideoMode) 0.84f else 1.0f,
+        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing),
+        label = "MinecraftTitleScaleAnim"
+    )
+    val titleOffsetY by animateDpAsState(
+        targetValue = if (isVideoMode) 12.dp else 0.dp,
+        animationSpec = tween(durationMillis = 480, easing = FastOutSlowInEasing),
+        label = "MinecraftTitleOffsetAnim"
+    )
+
     Surface(
         shape = RoundedCornerShape(22.dp),
         color = CardSlateBg,
         modifier = Modifier.fillMaxSize()
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (isVideoMode && !isHibernated) {
-                // Static wallpaper is turned OFF while official Minecraft YouTube Trailer (720p) is playing!
-                MinecraftTrailerVideoWallpaperPlayer(
-                    videoId = activeTrailer.videoId,
-                    isMuted = config.muteTrailerVideo,
-                    isPaused = isHibernated,
-                    onVideoEndedOrError = {
-                        currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
-                    },
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else if (!isHibernated) {
-                AnimatedContent(
-                    targetState = wallpaperIndex % totalCount.coerceAtLeast(1),
-                    transitionSpec = {
-                        fadeIn(animationSpec = tween(900)).togetherWith(fadeOut(animationSpec = tween(900))).using(sizeTransform = null)
-                    },
-                    modifier = Modifier.fillMaxSize(),
-                    label = "MinecraftWallpaperCarousel"
-                ) { idx ->
-                    if (idx >= DASHBOARD_WALLPAPERS.size && (idx - DASHBOARD_WALLPAPERS.size) < customWallpapers.size) {
-                        val customFile = customWallpapers[idx - DASHBOARD_WALLPAPERS.size]
-                        val bmp = remember(customFile.absolutePath) {
-                            runCatching { BitmapFactory.decodeFile(customFile.absolutePath)?.asImageBitmap() }.getOrNull()
-                        }
-                        if (bmp != null) {
-                            Image(
-                                bitmap = bmp,
-                                contentDescription = "Custom Minecraft Wallpaper",
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize()
-                            )
+            AnimatedContent(
+                targetState = isVideoMode,
+                transitionSpec = {
+                    fadeIn(animationSpec = tween(520, easing = FastOutSlowInEasing))
+                        .togetherWith(fadeOut(animationSpec = tween(420)))
+                        .using(sizeTransform = null)
+                },
+                modifier = Modifier.fillMaxSize(),
+                label = "WallpaperVsVideoModeTransition"
+            ) { videoActive ->
+                if (videoActive && !isHibernated) {
+                    MinecraftTrailerVideoWallpaperPlayer(
+                        videoId = activeTrailer.videoId,
+                        directStreamUrl = activeDirectStreamUrl,
+                        trailerTitle = activeTrailer.title,
+                        isMuted = config.muteTrailerVideo,
+                        isPaused = isHibernated,
+                        onVideoEndedOrError = {
+                            currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else if (!isHibernated) {
+                    AnimatedContent(
+                        targetState = wallpaperIndex % totalCount.coerceAtLeast(1),
+                        transitionSpec = {
+                            fadeIn(animationSpec = tween(900)).togetherWith(fadeOut(animationSpec = tween(900))).using(sizeTransform = null)
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                        label = "MinecraftWallpaperCarousel"
+                    ) { idx ->
+                        if (idx >= DASHBOARD_WALLPAPERS.size && (idx - DASHBOARD_WALLPAPERS.size) < customWallpapers.size) {
+                            val customFile = customWallpapers[idx - DASHBOARD_WALLPAPERS.size]
+                            val bmp = remember(customFile.absolutePath) {
+                                runCatching { BitmapFactory.decodeFile(customFile.absolutePath)?.asImageBitmap() }.getOrNull()
+                            }
+                            if (bmp != null) {
+                                Image(
+                                    bitmap = bmp,
+                                    contentDescription = "Custom Minecraft Wallpaper",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            } else {
+                                Image(
+                                    painter = painterResource(id = DASHBOARD_WALLPAPERS[0]),
+                                    contentDescription = "Minecraft Wallpaper",
+                                    contentScale = ContentScale.Crop,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         } else {
+                            val resId = DASHBOARD_WALLPAPERS[idx % DASHBOARD_WALLPAPERS.size]
                             Image(
-                                painter = painterResource(id = DASHBOARD_WALLPAPERS[0]),
+                                painter = painterResource(id = resId),
                                 contentDescription = "Minecraft Wallpaper",
                                 contentScale = ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
-                    } else {
-                        val resId = DASHBOARD_WALLPAPERS[idx % DASHBOARD_WALLPAPERS.size]
-                        Image(
-                            painter = painterResource(id = resId),
-                            contentDescription = "Minecraft Wallpaper",
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
                     }
                 }
             }
@@ -2056,13 +2429,12 @@ private fun CleanHomeViewport(
                         Brush.verticalGradient(
                             colors = listOf(
                                 Color.Black.copy(alpha = if (isVideoMode) 0.04f else 0.08f),
-                                Color.Black.copy(alpha = if (isVideoMode) 0.58f else 0.68f)
+                                Color.Black.copy(alpha = if (isVideoMode) 0.56f else 0.68f)
                             )
                         )
                     )
             )
 
-            // Top-Right Controls: Switch between Wallpaper & 720p YouTube Trailer + Mute/Silent Toggle + Next Trailer / Import Wallpaper
             Row(
                 modifier = Modifier
                     .align(Alignment.TopEnd)
@@ -2070,22 +2442,34 @@ private fun CleanHomeViewport(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (isVideoMode) {
-                    DashboardQuickIconPill(
-                        icon = if (config.muteTrailerVideo) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
-                        label = if (config.muteTrailerVideo) "Silent" else "720p Audio",
-                        onClick = {
-                            onConfigChange(config.copy(muteTrailerVideo = !config.muteTrailerVideo))
-                        }
-                    )
-                    DashboardQuickIconPill(
-                        icon = Icons.Default.SkipNext,
-                        label = "Next Trailer",
-                        onClick = {
-                            currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
-                        }
-                    )
-                } else {
+                AnimatedVisibility(
+                    visible = isVideoMode,
+                    enter = fadeIn(tween(300)) + expandHorizontally(tween(300)),
+                    exit = fadeOut(tween(220)) + shrinkHorizontally(tween(220))
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        DashboardQuickIconPill(
+                            icon = if (config.muteTrailerVideo) Icons.Default.VolumeOff else Icons.Default.VolumeUp,
+                            label = if (config.muteTrailerVideo) "Silent" else "Sound On",
+                            onClick = {
+                                onConfigChange(config.copy(muteTrailerVideo = !config.muteTrailerVideo))
+                            }
+                        )
+                        DashboardQuickIconPill(
+                            icon = Icons.Default.SkipNext,
+                            label = "Next Trailer",
+                            onClick = {
+                                currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                            }
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = !isVideoMode,
+                    enter = fadeIn(tween(300)) + expandHorizontally(tween(300)),
+                    exit = fadeOut(tween(220)) + shrinkHorizontally(tween(220))
+                ) {
                     DashboardQuickIconPill(
                         icon = Icons.Default.Wallpaper,
                         label = "Wallpaper",
@@ -2095,7 +2479,7 @@ private fun CleanHomeViewport(
 
                 DashboardQuickIconPill(
                     icon = if (isVideoMode) Icons.Default.Image else Icons.Default.PlayCircleFilled,
-                    label = if (isVideoMode) "Use Wallpaper" else "Play Trailer (720p)",
+                    label = if (isVideoMode) "Use Wallpaper" else "Play Trailer",
                     onClick = {
                         val nextVideo = !isVideoMode
                         onConfigChange(
@@ -2108,43 +2492,20 @@ private fun CleanHomeViewport(
                 )
             }
 
-            // Bottom-Left Minecraft Grass Icon + Title + Active Trailer Badge + Animated Splash Quote
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (isVideoMode) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = Color(0xFF141C22).copy(alpha = 0.82f),
-                        modifier = Modifier.border(1.dp, SkyBlueAccent.copy(alpha = 0.45f), RoundedCornerShape(50))
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.SmartDisplay,
-                                contentDescription = null,
-                                tint = Color(0xFFFF5252),
-                                modifier = Modifier.size(14.dp)
-                            )
-                            Text(
-                                text = "Minecraft Official Trailer (720p): ${activeTrailer.title}",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = Color.White,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
-                }
-
                 Row(
+                    modifier = Modifier
+                        .offset(y = titleOffsetY)
+                        .graphicsLayer {
+                            scaleX = titleScale
+                            scaleY = titleScale
+                            transformOrigin = TransformOrigin(0f, 1f)
+                        },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
@@ -2164,32 +2525,42 @@ private fun CleanHomeViewport(
                     }
                 }
 
-                AnimatedContent(
-                    targetState = MINECRAFT_SPLASH_QUOTES[quoteIndex],
-                    transitionSpec = {
-                        (slideInVertically(tween(340)) { h -> h / 2 } + fadeIn(tween(340)))
-                            .togetherWith(
-                                slideOutVertically(tween(260)) { h -> -h / 2 } + fadeOut(tween(240))
-                            )
-                            .using(sizeTransform = null)
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth(0.92f)
-                        .animatedPressScale {
-                            quoteIndex = (quoteIndex + 1) % MINECRAFT_SPLASH_QUOTES.size
-                            if (!isVideoMode) {
-                                wallpaperIndex = (wallpaperIndex + 1) % totalCount.coerceAtLeast(1)
-                            }
+                AnimatedVisibility(
+                    visible = !isVideoMode,
+                    enter = fadeIn(tween(420, easing = FastOutSlowInEasing)) +
+                        expandVertically(tween(420, easing = FastOutSlowInEasing)) +
+                        slideInVertically(tween(420, easing = FastOutSlowInEasing)) { h -> h / 2 },
+                    exit = fadeOut(tween(280)) +
+                        shrinkVertically(tween(340, easing = FastOutSlowInEasing)) +
+                        slideOutVertically(tween(280)) { h -> h / 2 }
+                ) {
+                    AnimatedContent(
+                        targetState = MINECRAFT_SPLASH_QUOTES[quoteIndex],
+                        transitionSpec = {
+                            (slideInVertically(tween(340)) { h -> h / 2 } + fadeIn(tween(340)))
+                                .togetherWith(
+                                    slideOutVertically(tween(260)) { h -> -h / 2 } + fadeOut(tween(240))
+                                )
+                                .using(sizeTransform = null)
                         },
-                    label = "MinecraftSplashQuote"
-                ) { quote ->
-                    Text(
-                        text = "“$quote”",
-                        fontSize = 13.sp,
-                        fontStyle = FontStyle.Italic,
-                        fontWeight = FontWeight.SemiBold,
-                        color = Color(0xFFFFE082)
-                    )
+                        modifier = Modifier
+                            .fillMaxWidth(0.92f)
+                            .animatedPressScale {
+                                if (!isVideoMode) {
+                                    quoteIndex = (quoteIndex + 1) % MINECRAFT_SPLASH_QUOTES.size
+                                    wallpaperIndex = (wallpaperIndex + 1) % totalCount.coerceAtLeast(1)
+                                }
+                            },
+                        label = "MinecraftSplashQuote"
+                    ) { quote ->
+                        Text(
+                            text = "“$quote”",
+                            fontSize = 13.sp,
+                            fontStyle = FontStyle.Italic,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFFFFE082)
+                        )
+                    }
                 }
             }
         }
@@ -2240,6 +2611,9 @@ private fun CleanAccountsAndSkinsViewport(
     activeSkinBitmap: Bitmap,
     config: HorizonConfigState,
     detectionBanner: String?,
+    customSkinNameInput: String,
+    onCustomSkinNameChange: (String) -> Unit,
+    skinReloadCounter: Int,
     onLaunchSkinPicker: () -> Unit,
     onUpdateBanner: (String?) -> Unit,
     onSkinUpdated: () -> Unit,
@@ -2247,9 +2621,76 @@ private fun CleanAccountsAndSkinsViewport(
 ) {
     val context = LocalContext.current
     var selectedSubTab by remember { mutableStateOf(AccountSubCategory.SKIN_STUDIO) }
-    var showBackView by remember { mutableStateOf(false) }
+    var is3DPreview by remember { mutableStateOf(true) }
+    var autoRotate3D by remember { mutableStateOf(true) }
+    var walkAnim3D by remember { mutableStateOf(true) }
+    var showBackView2D by remember { mutableStateOf(false) }
     var newAccountName by remember { mutableStateOf("") }
     var selectedAccountType by remember { mutableStateOf(AccountType.OFFLINE) }
+
+    var savedSkinLibrary by remember { mutableStateOf<List<SavedCustomSkinItem>>(emptyList()) }
+    var renameSkinTarget by remember { mutableStateOf<SavedCustomSkinItem?>(null) }
+    var renameSkinInput by remember { mutableStateOf("") }
+
+    LaunchedEffect(skinReloadCounter, activeAccount.skinPath) {
+        savedSkinLibrary = withContext(Dispatchers.IO) {
+            HorizonNativeBridge.loadSavedSkinLibrary(context)
+        }
+    }
+
+    renameSkinTarget?.let { target ->
+        AlertDialog(
+            onDismissRequest = { renameSkinTarget = null },
+            containerColor = Color(0xFF1F262B),
+            title = {
+                Text("Atur Nama Skin", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = Color.White)
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "Ubah nama file skin (kosongkan untuk otomatis default.png, default1.png, dst.):",
+                        fontSize = 12.sp,
+                        color = MutedSubtitleText
+                    )
+                    OutlinedTextField(
+                        value = renameSkinInput,
+                        onValueChange = { renameSkinInput = it },
+                        singleLine = true,
+                        label = { Text("Nama Skin (.png)", fontSize = 11.sp) }
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val updated = HorizonNativeBridge.renameSavedCustomSkin(context, target, renameSkinInput)
+                        if (updated != null) {
+                            savedSkinLibrary = HorizonNativeBridge.loadSavedSkinLibrary(context)
+                            if (activeAccount.skinPath == target.filePath) {
+                                val updatedAccounts = accounts.map { acc ->
+                                    if (acc.id == activeAccount.id) {
+                                        acc.copy(skinPath = updated.filePath, skinSourceLabel = updated.fileName)
+                                    } else acc
+                                }
+                                onAccountsChange(updatedAccounts)
+                            }
+                            onSkinUpdated()
+                            onUpdateBanner("Nama skin berhasil diubah menjadi '${updated.fileName}'!")
+                        }
+                        renameSkinTarget = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = SkyBlueAccent)
+                ) {
+                    Text("Simpan", color = SkyBlueDarkText, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { renameSkinTarget = null }) {
+                    Text("Batal", color = Color.White)
+                }
+            }
+        )
+    }
 
     Row(
         modifier = Modifier.fillMaxSize(),
@@ -2282,12 +2723,11 @@ private fun CleanAccountsAndSkinsViewport(
                         modifier = Modifier.fillMaxSize(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        // Left Card: Interactive 2D Full-Body Minecraft Character Preview
                         Surface(
                             shape = RoundedCornerShape(22.dp),
                             color = CardSlateBg,
                             modifier = Modifier
-                                .width(196.dp)
+                                .width(206.dp)
                                 .fillMaxHeight()
                         ) {
                             Column(
@@ -2332,14 +2772,14 @@ private fun CleanAccountsAndSkinsViewport(
 
                                     Surface(
                                         shape = RoundedCornerShape(50),
-                                        color = SubRailCapsuleActive,
-                                        modifier = Modifier.animatedPressScale { showBackView = !showBackView }
+                                        color = SkyBlueAccent,
+                                        modifier = Modifier.animatedPressScale { is3DPreview = !is3DPreview }
                                     ) {
                                         Text(
-                                            text = if (showBackView) "Back" else "Front",
+                                            text = if (is3DPreview) "3D Preview" else "2D View",
                                             fontSize = 10.sp,
                                             fontWeight = FontWeight.Bold,
-                                            color = SkyBlueAccent,
+                                            color = SkyBlueDarkText,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                                         )
                                     }
@@ -2355,31 +2795,99 @@ private fun CleanAccountsAndSkinsViewport(
                                             Brush.verticalGradient(
                                                 listOf(Color(0xFF171E24), Color(0xFF101519))
                                             )
-                                        )
-                                        .animatedPressScale { showBackView = !showBackView },
+                                        ),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    MinecraftSkinFullBodyCanvas(
-                                        skinBitmap = activeSkinBitmap,
-                                        slimArms = activeAccount.slimSkinModel,
-                                        showBack = showBackView,
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .padding(8.dp)
-                                    )
+                                    AnimatedContent(
+                                        targetState = is3DPreview,
+                                        transitionSpec = {
+                                            fadeIn(tween(260)).togetherWith(fadeOut(tween(200))).using(sizeTransform = null)
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                        label = "Skin3Dvs2DTransition"
+                                    ) { mode3d ->
+                                        if (mode3d) {
+                                            MinecraftSkin3DPreviewCanvas(
+                                                skinBitmap = activeSkinBitmap,
+                                                slimArms = activeAccount.slimSkinModel,
+                                                autoRotate = autoRotate3D,
+                                                walkAnimation = walkAnim3D,
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .padding(6.dp)
+                                            )
+                                        } else {
+                                            MinecraftSkinFullBodyCanvas(
+                                                skinBitmap = activeSkinBitmap,
+                                                slimArms = activeAccount.slimSkinModel,
+                                                showBack = showBackView2D,
+                                                modifier = Modifier
+                                                    .fillMaxSize()
+                                                    .padding(8.dp)
+                                                    .clickable { showBackView2D = !showBackView2D }
+                                            )
+                                        }
+                                    }
                                 }
 
-                                Text(
-                                    text = activeAccount.skinSourceLabel,
-                                    fontSize = 10.sp,
-                                    color = MutedSubtitleText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    if (is3DPreview) {
+                                        Surface(
+                                            shape = RoundedCornerShape(50),
+                                            color = if (autoRotate3D) SubRailCapsuleActive else CardRowBg,
+                                            modifier = Modifier.animatedPressScale { autoRotate3D = !autoRotate3D }
+                                        ) {
+                                            Text(
+                                                text = if (autoRotate3D) "Spin: ON" else "Spin: OFF",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (autoRotate3D) SkyBlueAccent else MutedSubtitleText,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                        Surface(
+                                            shape = RoundedCornerShape(50),
+                                            color = if (walkAnim3D) SubRailCapsuleActive else CardRowBg,
+                                            modifier = Modifier.animatedPressScale { walkAnim3D = !walkAnim3D }
+                                        ) {
+                                            Text(
+                                                text = if (walkAnim3D) "Walk: ON" else "Walk: OFF",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = if (walkAnim3D) SkyBlueAccent else MutedSubtitleText,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                    } else {
+                                        Surface(
+                                            shape = RoundedCornerShape(50),
+                                            color = SubRailCapsuleActive,
+                                            modifier = Modifier.animatedPressScale { showBackView2D = !showBackView2D }
+                                        ) {
+                                            Text(
+                                                text = if (showBackView2D) "Tampak Belakang" else "Tampak Depan",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = SkyBlueAccent,
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                            )
+                                        }
+                                    }
+                                    Text(
+                                        text = activeAccount.skinSourceLabel,
+                                        fontSize = 9.sp,
+                                        color = MutedSubtitleText,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
                             }
                         }
 
-                        // Right Column: Compact, Unclipped Skin Importer + Arm Model Selector + Preset List
                         Column(
                             modifier = Modifier
                                 .weight(1f)
@@ -2403,7 +2911,7 @@ private fun CleanAccountsAndSkinsViewport(
                                     ) {
                                         Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                text = "Custom Skin & Photo Importer",
+                                                text = "Import Skin & Simpan ke Pilih Skin",
                                                 fontSize = 14.sp,
                                                 fontWeight = FontWeight.Bold,
                                                 color = Color.White,
@@ -2411,7 +2919,7 @@ private fun CleanAccountsAndSkinsViewport(
                                                 overflow = TextOverflow.Ellipsis
                                             )
                                             Text(
-                                                text = "Import file Skin PNG/JPG (64×64 / 64×32) atau Foto Galeri untuk digunakan di in-game.",
+                                                text = "Atur nama skin sendiri atau kosongkan agar otomatis diberi nama default.png, default1.png, default2.png, dst.",
                                                 fontSize = 11.sp,
                                                 color = MutedSubtitleText,
                                                 maxLines = 2
@@ -2447,6 +2955,62 @@ private fun CleanAccountsAndSkinsViewport(
                                         }
                                     }
 
+                                    Surface(
+                                        shape = RoundedCornerShape(12.dp),
+                                        color = Color(0xFF1A2024),
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(38.dp)
+                                            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(12.dp))
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .padding(horizontal = 12.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Edit,
+                                                contentDescription = null,
+                                                tint = SkyBlueAccent,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Box(
+                                                modifier = Modifier.weight(1f),
+                                                contentAlignment = Alignment.CenterStart
+                                            ) {
+                                                if (customSkinNameInput.isEmpty()) {
+                                                    Text(
+                                                        text = "Nama skin (opsional — kosongkan = default.png, default1.png, default2.png...)",
+                                                        fontSize = 11.sp,
+                                                        color = MutedSubtitleText,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis
+                                                    )
+                                                }
+                                                BasicTextField(
+                                                    value = customSkinNameInput,
+                                                    onValueChange = onCustomSkinNameChange,
+                                                    singleLine = true,
+                                                    textStyle = TextStyle(color = Color.White, fontSize = 12.sp),
+                                                    cursorBrush = SolidColor(SkyBlueAccent),
+                                                    modifier = Modifier.fillMaxWidth()
+                                                )
+                                            }
+                                            if (customSkinNameInput.isNotEmpty()) {
+                                                Icon(
+                                                    imageVector = Icons.Default.Close,
+                                                    contentDescription = "Clear",
+                                                    tint = MutedSubtitleText,
+                                                    modifier = Modifier
+                                                        .size(14.dp)
+                                                        .clickable { onCustomSkinNameChange("") }
+                                                )
+                                            }
+                                        }
+                                    }
+
                                     detectionBanner?.let { bannerMsg ->
                                         Surface(
                                             shape = RoundedCornerShape(10.dp),
@@ -2474,7 +3038,6 @@ private fun CleanAccountsAndSkinsViewport(
                                         }
                                     }
 
-                                    // Arm Model Selector (Wide 4px Steve vs Slim 3px Alex)
                                     Row(
                                         modifier = Modifier.fillMaxWidth(),
                                         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -2513,7 +3076,6 @@ private fun CleanAccountsAndSkinsViewport(
                                 }
                             }
 
-                            // Built-in Preset Skins Card (including the User's Gothic Monochrome Skin!)
                             Surface(
                                 shape = RoundedCornerShape(18.dp),
                                 color = CardSlateBg,
@@ -2523,12 +3085,125 @@ private fun CleanAccountsAndSkinsViewport(
                                     modifier = Modifier.padding(14.dp),
                                     verticalArrangement = Arrangement.spacedBy(7.dp)
                                 ) {
-                                    Text(
-                                        text = "Koleksi Skin Siap Pakai (1-Tap In-Game)",
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "Pilih Skin (Tersimpan & Preset Siap Pakai)",
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
+                                        )
+                                        LavenderTagBadge(text = "${savedSkinLibrary.size} Imported")
+                                    }
+
+                                    if (savedSkinLibrary.isNotEmpty()) {
+                                        savedSkinLibrary.forEach { savedItem ->
+                                            val itemBmp = remember(savedItem.filePath, savedItem.addedAt) {
+                                                BitmapFactory.decodeFile(savedItem.filePath)
+                                                    ?: HorizonNativeBridge.generatePresetSkinBitmap(BuiltInSkinPreset.CLASSIC_STEVE, context)
+                                            }
+                                            val isCurrent = activeAccount.skinPath == savedItem.filePath ||
+                                                activeAccount.skinSourceLabel == savedItem.fileName
+                                            Surface(
+                                                shape = RoundedCornerShape(14.dp),
+                                                color = if (isCurrent) SubRailCapsuleActive else CardRowBg,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .animatedPressScale {
+                                                        val updatedAcc = HorizonNativeBridge.applySavedCustomSkin(
+                                                            context,
+                                                            savedItem,
+                                                            activeAccount,
+                                                            config
+                                                        )
+                                                        val updatedList = accounts.map { if (it.id == activeAccount.id) updatedAcc else it }
+                                                        onAccountsChange(updatedList)
+                                                        onSkinUpdated()
+                                                        onUpdateBanner("Skin '${savedItem.fileName}' aktif & siap digunakan di in-game!")
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                                        modifier = Modifier.weight(1f)
+                                                    ) {
+                                                        MinecraftSkinHeadAvatar(
+                                                            skinBitmap = itemBmp,
+                                                            size = 32.dp,
+                                                            cornerRadius = 7.dp
+                                                        )
+                                                        Column(modifier = Modifier.weight(1f)) {
+                                                            Text(
+                                                                text = savedItem.fileName,
+                                                                fontSize = 12.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = Color.White,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                            Text(
+                                                                text = "${savedItem.sourceLabel} • ${if (savedItem.slimModel) "Slim (3px)" else "Wide (4px)"}",
+                                                                fontSize = 10.sp,
+                                                                color = SkyBlueAccent,
+                                                                maxLines = 1,
+                                                                overflow = TextOverflow.Ellipsis
+                                                            )
+                                                        }
+                                                    }
+
+                                                    Row(
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                                    ) {
+                                                        Icon(
+                                                            imageVector = Icons.Default.Edit,
+                                                            contentDescription = "Ubah Nama Skin",
+                                                            tint = Color(0xFFD5DEE5),
+                                                            modifier = Modifier
+                                                                .size(17.dp)
+                                                                .clickable {
+                                                                    renameSkinInput = savedItem.fileName.removeSuffix(".png")
+                                                                    renameSkinTarget = savedItem
+                                                                }
+                                                        )
+                                                        Icon(
+                                                            imageVector = Icons.Outlined.Delete,
+                                                            contentDescription = "Hapus Skin",
+                                                            tint = Color(0xFFFF8A80),
+                                                            modifier = Modifier
+                                                                .size(17.dp)
+                                                                .clickable {
+                                                                    HorizonNativeBridge.deleteSavedCustomSkin(context, savedItem)
+                                                                    savedSkinLibrary = HorizonNativeBridge.loadSavedSkinLibrary(context)
+                                                                }
+                                                        )
+                                                        Surface(
+                                                            shape = RoundedCornerShape(9.dp),
+                                                            color = if (isCurrent) SkyBlueAccent else Color(0xFF344149)
+                                                        ) {
+                                                            Text(
+                                                                text = if (isCurrent) "Active" else "Pakai",
+                                                                fontSize = 11.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (isCurrent) SkyBlueDarkText else Color.White,
+                                                                maxLines = 1,
+                                                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     BuiltInSkinPreset.entries.forEach { preset ->
                                         val presetBmp = remember(preset) { HorizonNativeBridge.generatePresetSkinBitmap(preset, context) }
                                         val isCurrent = activeAccount.skinSourceLabel == "Preset: ${preset.title}"
@@ -4948,6 +5623,21 @@ private fun StoreOrFileItemIconBadge(
     }
 }
 
+private data class ManagerRowUiItem(
+    val key: String,
+    val file: File,
+    val folder: String,
+    val displayTitle: String,
+    val subtitleText: String,
+    val detailSummary: String,
+    val isEnabled: Boolean,
+    val lastModified: Long,
+    val modDetail: ModPackageDetailInfo?,
+    val saveDetail: WorldSaveDetailInfo?,
+    val packDetail: ResourcePackDetailInfo?,
+    val iconImage: ImageBitmap?
+)
+
 enum class FilesSortMode(val label: String) {
     BY_NAME("Sort by Name"),
     BY_FILE_NAME("Sort by File Name"),
@@ -5005,9 +5695,8 @@ private fun CleanFilesViewport(
     )
 
     var rawList by remember { mutableStateOf<List<File>>(emptyList()) }
-    var filteredList by remember { mutableStateOf<List<File>>(emptyList()) }
+    var filteredList by remember { mutableStateOf<List<ManagerRowUiItem>>(emptyList()) }
 
-    // Perform all directory scanning, `.hmod` repair, and metadata pre-warming on Dispatchers.IO (zero UI lag!)
     LaunchedEffect(currentFolder, refreshCount, profileSlot) {
         val loaded = withContext(Dispatchers.IO) {
             if (currentFolder == "mods") {
@@ -5017,13 +5706,9 @@ private fun CleanFilesViewport(
                     ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".tmp") && it.name.endsWith(".hmod", true) }
                     ?.distinctBy { HorizonNativeBridge.sanitizeModId(it.name) }
                     .orEmpty()
-                    .also { list -> list.forEach { HorizonNativeBridge.inspectModPackage(it) } }
             } else {
                 val dirFile = File(home, currentFolder).apply { mkdirs() }
-                dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty().also { list ->
-                    if (currentFolder == "saves") list.forEach { HorizonNativeBridge.inspectWorldSave(it) }
-                    else if (currentFolder in listOf("resourcepacks", "shaderpacks")) list.forEach { HorizonNativeBridge.inspectResourcePack(it) }
-                }
+                dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty()
             }
         }
         rawList = loaded
@@ -5031,22 +5716,64 @@ private fun CleanFilesViewport(
 
     LaunchedEffect(rawList, searchQuery, filterEnabledOnly, currentFolder, sortMode, refreshCount) {
         val computed = withContext(Dispatchers.IO) {
-            val base = rawList.filter { file ->
-                val modInfo = if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(file) else null
+            val isToggleableFolder = currentFolder in listOf("mods", "shaderpacks", "resourcepacks")
+            val prebuilt = rawList.mapNotNull { file ->
+                val modDetail = if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(file) else null
+                val saveDetail = if (currentFolder == "saves") HorizonNativeBridge.inspectWorldSave(file) else null
+                val packDetail = if (currentFolder in listOf("resourcepacks", "shaderpacks")) HorizonNativeBridge.inspectResourcePack(file) else null
+                val enabled = if (isToggleableFolder) {
+                    HorizonNativeBridge.isContentItemEnabled(context, currentFolder, file.name, profileSlot)
+                } else true
+
+                val displayTitle = when {
+                    modDetail != null -> modDetail.displayName
+                    saveDetail != null -> saveDetail.displayName
+                    packDetail != null -> packDetail.title
+                    else -> file.nameWithoutExtension.replace("-", " ").replace("_", " ")
+                }
+                val subtitleText = when {
+                    modDetail != null -> "${modDetail.description} • by ${modDetail.author} (${modDetail.fileName})"
+                    saveDetail != null -> "Last played: ${saveDetail.lastPlayedFormatted}"
+                    packDetail != null -> packDetail.description
+                    else -> "File Name: ${file.name}"
+                }
+
                 val matchesQuery = searchQuery.isBlank() ||
                     file.name.contains(searchQuery, ignoreCase = true) ||
-                    (modInfo != null && (modInfo.displayName.contains(searchQuery, ignoreCase = true) || modInfo.description.contains(searchQuery, ignoreCase = true)))
-                val matchesEnabled = if (!filterEnabledOnly || currentFolder in listOf("saves", "screenshots")) true
-                else HorizonNativeBridge.isContentItemEnabled(context, currentFolder, file.name, profileSlot)
-                matchesQuery && matchesEnabled
+                    displayTitle.contains(searchQuery, ignoreCase = true) ||
+                    subtitleText.contains(searchQuery, ignoreCase = true)
+                val matchesEnabled = !filterEnabledOnly || !isToggleableFolder || enabled
+
+                if (!matchesQuery || !matchesEnabled) {
+                    null
+                } else {
+                    val iconBmp = HorizonNativeBridge.loadLocalContentIconBitmap(file)?.asImageBitmap()
+                    val detailSummary = when {
+                        modDetail != null -> "ID: ${modDetail.modId} • API ${modDetail.apiLine} • Side: ${modDetail.side} • Size: ${modDetail.fileSizeFormatted}"
+                        packDetail != null -> "${packDetail.packType} • Format v${packDetail.formatVersion} • Size: ${packDetail.fileSizeFormatted}"
+                        saveDetail != null -> "${saveDetail.difficulty} • ${saveDetail.playTimeFormatted} • Seed: ${saveDetail.worldSeed}"
+                        else -> "File: ${file.name} (${file.length() / 1024} KB)"
+                    }
+                    ManagerRowUiItem(
+                        key = file.absolutePath,
+                        file = file,
+                        folder = currentFolder,
+                        displayTitle = displayTitle,
+                        subtitleText = subtitleText,
+                        detailSummary = detailSummary,
+                        isEnabled = enabled,
+                        lastModified = file.lastModified(),
+                        modDetail = modDetail,
+                        saveDetail = saveDetail,
+                        packDetail = packDetail,
+                        iconImage = iconBmp
+                    )
+                }
             }
             when (sortMode) {
-                FilesSortMode.BY_NAME -> base.sortedBy {
-                    if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(it).displayName.lowercase(Locale.US)
-                    else it.nameWithoutExtension.lowercase(Locale.US)
-                }
-                FilesSortMode.BY_FILE_NAME -> base.sortedBy { it.name.lowercase(Locale.US) }
-                FilesSortMode.BY_LAST_MODIFIED -> base.sortedByDescending { it.lastModified() }
+                FilesSortMode.BY_NAME -> prebuilt.sortedBy { it.displayTitle.lowercase(Locale.US) }
+                FilesSortMode.BY_FILE_NAME -> prebuilt.sortedBy { it.file.name.lowercase(Locale.US) }
+                FilesSortMode.BY_LAST_MODIFIED -> prebuilt.sortedByDescending { it.lastModified }
             }
         }
         filteredList = computed
@@ -5416,14 +6143,16 @@ private fun CleanFilesViewport(
                             modifier = Modifier.fillMaxSize(),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            items(filteredList, key = { it.absolutePath }) { file ->
+                            items(
+                                items = filteredList,
+                                key = { it.key },
+                                contentType = { it.folder }
+                            ) { rowItem ->
                                 FileManagerRowCard(
-                                    file = file,
-                                    folder = folder,
+                                    rowItem = rowItem,
                                     folderLabel = folderLabel,
                                     profileSlot = profileSlot,
                                     logEnabled = logEnabled,
-                                    refreshCount = refreshCount,
                                     onTriggerRefresh = { refreshCount += 1 },
                                     onRequestRename = { target ->
                                         renameInputText = target.nameWithoutExtension
@@ -5450,78 +6179,41 @@ private fun CleanFilesViewport(
 
 @Composable
 private fun FileManagerRowCard(
-    file: File,
-    folder: String,
+    rowItem: ManagerRowUiItem,
     folderLabel: String,
     profileSlot: Int,
     logEnabled: Boolean,
-    refreshCount: Int,
     onTriggerRefresh: () -> Unit,
     onRequestRename: (File) -> Unit,
     onRequestDelete: (File, String) -> Unit,
     onQuickPlayWorld: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val file = rowItem.file
+    val folder = rowItem.folder
+    val displayTitle = rowItem.displayTitle
+    val subtitleText = rowItem.subtitleText
+    val isEnabled = rowItem.isEnabled
+    val modDetail = rowItem.modDetail
+    val saveDetail = rowItem.saveDetail
+    val packDetail = rowItem.packDetail
+
     var showInfoPopover by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
     var expandedDetails by remember { mutableStateOf(false) }
 
     val isToggleable = folder in listOf("mods", "shaderpacks", "resourcepacks")
-    val isEnabled = remember(file.name, refreshCount, folder) {
-        if (isToggleable) {
-            HorizonNativeBridge.isContentItemEnabled(context, folder, file.name, profileSlot)
-        } else true
-    }
-
-    var localIconBmp by remember(file.absolutePath, file.lastModified()) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(file.absolutePath, file.lastModified()) {
-        localIconBmp = withContext(Dispatchers.IO) {
-            HorizonNativeBridge.loadLocalContentIconBitmap(file)
-        }
-    }
-
-    val modDetail = remember(file.absolutePath, file.lastModified(), folder, refreshCount) {
-        if (folder == "mods") HorizonNativeBridge.inspectModPackage(file) else null
-    }
-    val saveDetail = remember(file.absolutePath, file.lastModified(), folder) {
-        if (folder == "saves") HorizonNativeBridge.inspectWorldSave(file) else null
-    }
-    val packDetail = remember(file.absolutePath, file.lastModified(), folder) {
-        if (folder in listOf("resourcepacks", "shaderpacks")) HorizonNativeBridge.inspectResourcePack(file) else null
-    }
-
-    val displayTitle = when {
-        modDetail != null -> modDetail.displayName
-        saveDetail != null -> saveDetail.displayName
-        packDetail != null -> packDetail.title
-        else -> file.nameWithoutExtension.replace("-", " ").replace("_", " ")
-    }
-
-    val subtitleText = when {
-        modDetail != null -> "${modDetail.description} • by ${modDetail.author} (${modDetail.fileName})"
-        saveDetail != null -> "Last played: ${saveDetail.lastPlayedFormatted}"
-        packDetail != null -> packDetail.description
-        else -> "File Name: ${file.name}"
-    }
-
-    val animatedBorderColor by animateColorAsState(
-        targetValue = if (isToggleable && isEnabled) SkyBlueAccent.copy(alpha = 0.38f) else Color.Transparent,
-        animationSpec = tween(220),
-        label = "ManagerRowBorderColor"
-    )
-    val animatedCardColor by animateColorAsState(
-        targetValue = if (expandedDetails) SubRailCapsuleActive.copy(alpha = 0.55f) else CardRowBg,
-        animationSpec = tween(220),
-        label = "ManagerRowBgColor"
-    )
+    val borderColor = if (isToggleable && isEnabled) SkyBlueAccent.copy(alpha = 0.38f) else Color.Transparent
+    val cardColor = if (expandedDetails) SubRailCapsuleActive.copy(alpha = 0.55f) else CardRowBg
 
     Surface(
         shape = RoundedCornerShape(16.dp),
-        color = animatedCardColor,
+        color = cardColor,
         modifier = Modifier
             .fillMaxWidth()
-            .border(1.dp, animatedBorderColor, RoundedCornerShape(16.dp))
-            .animatedPressScale { expandedDetails = !expandedDetails }
+            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
+            .clickable { expandedDetails = !expandedDetails }
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             Row(
@@ -5529,10 +6221,9 @@ private fun FileManagerRowCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Left 44dp Icon
-                if (localIconBmp != null) {
+                if (rowItem.iconImage != null) {
                     Image(
-                        bitmap = localIconBmp!!.asImageBitmap(),
+                        bitmap = rowItem.iconImage,
                         contentDescription = displayTitle,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
@@ -5551,7 +6242,6 @@ private fun FileManagerRowCard(
 
                 Spacer(Modifier.width(12.dp))
 
-                // Middle Title + Badges + Subtitle
                 Column(
                     modifier = Modifier.weight(1f),
                     verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -5620,7 +6310,6 @@ private fun FileManagerRowCard(
 
                 Spacer(Modifier.width(10.dp))
 
-                // Right Action Controls
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -5629,8 +6318,12 @@ private fun FileManagerRowCard(
                         Checkbox(
                             checked = isEnabled,
                             onCheckedChange = {
-                                HorizonNativeBridge.toggleContentItem(context, folder, file.name, profileSlot, logEnabled)
-                                onTriggerRefresh()
+                                scope.launch(Dispatchers.IO) {
+                                    HorizonNativeBridge.toggleContentItem(context, folder, file.name, profileSlot, logEnabled)
+                                    withContext(Dispatchers.Main) {
+                                        onTriggerRefresh()
+                                    }
+                                }
                             },
                             colors = CheckboxDefaults.colors(
                                 checkedColor = SkyBlueAccent,
@@ -5641,7 +6334,6 @@ private fun FileManagerRowCard(
                         )
                     }
 
-                    // `ⓘ` Info Icon with Floating Popover Card
                     Box {
                         Icon(
                             imageVector = Icons.Outlined.Info,
@@ -5649,103 +6341,103 @@ private fun FileManagerRowCard(
                             tint = Color(0xFFD5DEE5),
                             modifier = Modifier
                                 .size(20.dp)
-                                .animatedPressScale { showInfoPopover = true }
+                                .clickable { showInfoPopover = true }
                         )
 
-                        DropdownMenu(
-                            expanded = showInfoPopover,
-                            onDismissRequest = { showInfoPopover = false },
-                            modifier = Modifier
-                                .widthIn(min = 260.dp, max = 330.dp)
-                                .background(Color(0xFF283036))
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
-                                verticalArrangement = Arrangement.spacedBy(5.dp)
+                        if (showInfoPopover) {
+                            DropdownMenu(
+                                expanded = showInfoPopover,
+                                onDismissRequest = { showInfoPopover = false },
+                                modifier = Modifier
+                                    .widthIn(min = 260.dp, max = 330.dp)
+                                    .background(Color(0xFF283036))
                             ) {
-                                if (saveDetail != null) {
-                                    Text("Save Info", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                    Spacer(Modifier.height(2.dp))
-                                    Text("File Name: ${saveDetail.folderName}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("Game Mode: ${saveDetail.gameMode}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("Difficulty: ${saveDetail.difficulty}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("Play Time: ${saveDetail.playTimeFormatted}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    if (saveDetail != null) {
+                                        Text("Save Info", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("File Name: ${saveDetail.folderName}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("Game Mode: ${saveDetail.gameMode}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("Difficulty: ${saveDetail.difficulty}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("Play Time: ${saveDetail.playTimeFormatted}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "World Seed: ${saveDetail.worldSeed}",
+                                                fontSize = 12.sp,
+                                                color = Color(0xFFE0E6EB),
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            Icon(
+                                                imageVector = Icons.Default.ContentCopy,
+                                                contentDescription = "Copy Seed",
+                                                tint = SkyBlueAccent,
+                                                modifier = Modifier
+                                                    .size(15.dp)
+                                                    .clickable {
+                                                        HorizonNativeBridge.copyToClipboard(context, "World Seed", saveDetail.worldSeed)
+                                                    }
+                                            )
+                                        }
+                                    } else if (packDetail != null) {
                                         Text(
-                                            text = "World Seed: ${saveDetail.worldSeed}",
-                                            fontSize = 12.sp,
-                                            color = Color(0xFFE0E6EB),
-                                            modifier = Modifier.weight(1f, fill = false)
+                                            text = if (folder == "shaderpacks") "Shader Pack Information" else "Resource Pack Information",
+                                            fontSize = 14.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = Color.White
                                         )
-                                        Icon(
-                                            imageVector = Icons.Default.ContentCopy,
-                                            contentDescription = "Copy Seed",
-                                            tint = SkyBlueAccent,
-                                            modifier = Modifier
-                                                .size(15.dp)
-                                                .animatedPressScale {
-                                                    HorizonNativeBridge.copyToClipboard(context, "World Seed", saveDetail.worldSeed)
-                                                }
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("Pack Type: ${packDetail.packType}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("File Name: ${packDetail.fileName}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("File Size: ${packDetail.fileSizeFormatted}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("Format Version: ${packDetail.formatVersion}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                    } else if (modDetail != null) {
+                                        Text("Horizon Mod Manifest (horizon-mod.toml)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                                        Spacer(Modifier.height(2.dp))
+                                        Text("Mod ID: ${modDetail.modId}", fontSize = 12.sp, color = SkyBlueAccent)
+                                        Text("Version: ${modDetail.version} (API ${modDetail.apiLine})", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("Author: ${modDetail.author}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text("File: ${modDetail.fileName} (${modDetail.fileSizeFormatted})", fontSize = 12.sp, color = Color(0xFFE0E6EB))
+                                        Text(
+                                            text = "Capabilities: ${modDetail.capabilities.joinToString(", ").ifEmpty { "registries" }}",
+                                            fontSize = 12.sp,
+                                            color = Color(0xFF81C784)
+                                        )
+                                        Text(
+                                            text = "Status: ${if (isEnabled) "ON (Synced with horizon-mods.txt)" else "OFF (Disabled)"}",
+                                            fontSize = 12.sp,
+                                            color = if (isEnabled) Color(0xFF81C784) else Color(0xFFFF8A80)
                                         )
                                     }
-                                } else if (packDetail != null) {
-                                    Text(
-                                        text = if (folder == "shaderpacks") "Shader Pack Information" else "Resource Pack Information",
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = Color.White
-                                    )
-                                    Spacer(Modifier.height(2.dp))
-                                    Text("Pack Type: ${packDetail.packType}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("File Name: ${packDetail.fileName}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("File Size: ${packDetail.fileSizeFormatted}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("Format Version: ${packDetail.formatVersion}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                } else if (modDetail != null) {
-                                    Text("Horizon Mod Manifest (horizon-mod.toml)", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                                    Spacer(Modifier.height(2.dp))
-                                    Text("Mod ID: ${modDetail.modId}", fontSize = 12.sp, color = SkyBlueAccent)
-                                    Text("Version: ${modDetail.version} (API ${modDetail.apiLine})", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("Author: ${modDetail.author}", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text("File: ${modDetail.fileName} (${modDetail.fileSizeFormatted})", fontSize = 12.sp, color = Color(0xFFE0E6EB))
-                                    Text(
-                                        text = "Capabilities: ${modDetail.capabilities.joinToString(", ").ifEmpty { "registries" }}",
-                                        fontSize = 12.sp,
-                                        color = Color(0xFF81C784)
-                                    )
-                                    Text(
-                                        text = "Status: ${if (isEnabled) "ON (Synced with horizon-mods.txt)" else "OFF (Disabled)"}",
-                                        fontSize = 12.sp,
-                                        color = if (isEnabled) Color(0xFF81C784) else Color(0xFFFF8A80)
-                                    )
                                 }
                             }
                         }
                     }
 
                     if (folder == "mods") {
-                        // Delete Icon -> Opens Delete Confirmation Pop-Up Dialog!
                         Icon(
                             imageVector = Icons.Outlined.Delete,
                             contentDescription = "Delete Mod",
                             tint = Color(0xFFFF8A80),
                             modifier = Modifier
                                 .size(20.dp)
-                                .animatedPressScale {
+                                .clickable {
                                     onRequestDelete(file, displayTitle)
                                 }
                         )
                     } else {
-                        // `•••` More Options Button + Direct Delete Icon with Confirmation Pop-Up!
                         Icon(
                             imageVector = Icons.Outlined.Delete,
                             contentDescription = "Delete",
                             tint = Color(0xFFFF8A80),
                             modifier = Modifier
                                 .size(19.dp)
-                                .animatedPressScale {
+                                .clickable {
                                     onRequestDelete(file, displayTitle)
                                 }
                         )
@@ -5756,82 +6448,88 @@ private fun FileManagerRowCard(
                                 tint = Color(0xFFD5DEE5),
                                 modifier = Modifier
                                     .size(20.dp)
-                                    .animatedPressScale { showMoreMenu = true }
+                                    .clickable { showMoreMenu = true }
                             )
 
-                            DropdownMenu(
-                                expanded = showMoreMenu,
-                                onDismissRequest = { showMoreMenu = false },
-                                modifier = Modifier.background(Color(0xFF283036))
-                            ) {
-                                if (folder == "saves") {
-                                    DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
-                                        text = { Text("Quick Play", fontSize = 12.sp, color = Color.White) },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            onQuickPlayWorld()
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
-                                        text = { Text("Rename", fontSize = 12.sp, color = Color.White) },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            onRequestRename(file)
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Default.Save, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
-                                        text = { Text("Backup Save", fontSize = 12.sp, color = Color.White) },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            HorizonNativeBridge.backupWorldSave(context, file, logEnabled)
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(17.dp)) },
-                                        text = { Text("Delete", fontSize = 12.sp, color = Color(0xFFFF8A80)) },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            onRequestDelete(file, displayTitle)
-                                        }
-                                    )
-                                } else {
-                                    if (isToggleable) {
+                            if (showMoreMenu) {
+                                DropdownMenu(
+                                    expanded = showMoreMenu,
+                                    onDismissRequest = { showMoreMenu = false },
+                                    modifier = Modifier.background(Color(0xFF283036))
+                                ) {
+                                    if (folder == "saves") {
                                         DropdownMenuItem(
-                                            leadingIcon = {
-                                                Icon(
-                                                    if (isEnabled) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
-                                                    contentDescription = null,
-                                                    tint = SkyBlueAccent,
-                                                    modifier = Modifier.size(17.dp)
-                                                )
-                                            },
-                                            text = { Text(if (isEnabled) "Disable Pack" else "Enable Pack", fontSize = 12.sp, color = Color.White) },
+                                            leadingIcon = { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
+                                            text = { Text("Quick Play", fontSize = 12.sp, color = Color.White) },
                                             onClick = {
                                                 showMoreMenu = false
-                                                HorizonNativeBridge.toggleContentItem(context, folder, file.name, profileSlot, logEnabled)
-                                                onTriggerRefresh()
+                                                onQuickPlayWorld()
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
+                                            text = { Text("Rename", fontSize = 12.sp, color = Color.White) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onRequestRename(file)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            leadingIcon = { Icon(Icons.Default.Save, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
+                                            text = { Text("Backup Save", fontSize = 12.sp, color = Color.White) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                HorizonNativeBridge.backupWorldSave(context, file, logEnabled)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(17.dp)) },
+                                            text = { Text("Delete", fontSize = 12.sp, color = Color(0xFFFF8A80)) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onRequestDelete(file, displayTitle)
+                                            }
+                                        )
+                                    } else {
+                                        if (isToggleable) {
+                                            DropdownMenuItem(
+                                                leadingIcon = {
+                                                    Icon(
+                                                        if (isEnabled) Icons.Default.CheckBox else Icons.Default.CheckBoxOutlineBlank,
+                                                        contentDescription = null,
+                                                        tint = SkyBlueAccent,
+                                                        modifier = Modifier.size(17.dp)
+                                                    )
+                                                },
+                                                text = { Text(if (isEnabled) "Disable Pack" else "Enable Pack", fontSize = 12.sp, color = Color.White) },
+                                                onClick = {
+                                                    showMoreMenu = false
+                                                    scope.launch(Dispatchers.IO) {
+                                                        HorizonNativeBridge.toggleContentItem(context, folder, file.name, profileSlot, logEnabled)
+                                                        withContext(Dispatchers.Main) {
+                                                            onTriggerRefresh()
+                                                        }
+                                                    }
+                                                }
+                                            )
+                                        }
+                                        DropdownMenuItem(
+                                            leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
+                                            text = { Text("Rename", fontSize = 12.sp, color = Color.White) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onRequestRename(file)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(17.dp)) },
+                                            text = { Text("Delete", fontSize = 12.sp, color = Color(0xFFFF8A80)) },
+                                            onClick = {
+                                                showMoreMenu = false
+                                                onRequestDelete(file, displayTitle)
                                             }
                                         )
                                     }
-                                    DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Default.Edit, contentDescription = null, tint = Color.White, modifier = Modifier.size(17.dp)) },
-                                        text = { Text("Rename", fontSize = 12.sp, color = Color.White) },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            onRequestRename(file)
-                                        }
-                                    )
-                                    DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Outlined.Delete, contentDescription = null, tint = Color(0xFFFF8A80), modifier = Modifier.size(17.dp)) },
-                                        text = { Text("Delete", fontSize = 12.sp, color = Color(0xFFFF8A80)) },
-                                        onClick = {
-                                            showMoreMenu = false
-                                            onRequestDelete(file, displayTitle)
-                                        }
-                                    )
                                 }
                             }
                         }
@@ -5839,7 +6537,6 @@ private fun FileManagerRowCard(
                 }
             }
 
-            // Smooth Expandable Details Drawer when tapping a row card in Manager
             AnimatedVisibility(
                 visible = expandedDetails,
                 enter = expandVertically(tween(220, easing = FastOutSlowInEasing)) + fadeIn(tween(200)),
@@ -5853,12 +6550,7 @@ private fun FileManagerRowCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = when {
-                            modDetail != null -> "ID: ${modDetail.modId} • API ${modDetail.apiLine} • Side: ${modDetail.side} • Size: ${modDetail.fileSizeFormatted}"
-                            packDetail != null -> "${packDetail.packType} • Format v${packDetail.formatVersion} • Size: ${packDetail.fileSizeFormatted}"
-                            saveDetail != null -> "${saveDetail.difficulty} • ${saveDetail.playTimeFormatted} • Seed: ${saveDetail.worldSeed}"
-                            else -> "File: ${file.name} (${file.length() / 1024} KB)"
-                        },
+                        text = rowItem.detailSummary,
                         fontSize = 10.sp,
                         color = SkyBlueAccent
                     )
@@ -5867,9 +6559,13 @@ private fun FileManagerRowCard(
                             Surface(
                                 shape = RoundedCornerShape(8.dp),
                                 color = if (isEnabled) Color(0xFF1E3E29) else SkyBlueAccent,
-                                modifier = Modifier.animatedPressScale {
-                                    HorizonNativeBridge.toggleContentItem(context, folder, file.name, profileSlot, logEnabled)
-                                    onTriggerRefresh()
+                                modifier = Modifier.clickable {
+                                    scope.launch(Dispatchers.IO) {
+                                        HorizonNativeBridge.toggleContentItem(context, folder, file.name, profileSlot, logEnabled)
+                                        withContext(Dispatchers.Main) {
+                                            onTriggerRefresh()
+                                        }
+                                    }
                                 }
                             ) {
                                 Text(
@@ -5884,7 +6580,7 @@ private fun FileManagerRowCard(
                         Surface(
                             shape = RoundedCornerShape(8.dp),
                             color = Color(0xFF3A2326),
-                            modifier = Modifier.animatedPressScale { onRequestDelete(file, displayTitle) }
+                            modifier = Modifier.clickable { onRequestDelete(file, displayTitle) }
                         ) {
                             Text(
                                 text = "Hapus",
@@ -6245,7 +6941,7 @@ private fun CleanSettingsViewport(
                         )
 
                         ZalithSettingToggleCard(
-                            title = "Auto-Play Minecraft YouTube 'Trailer' Video (720p)",
+                            title = "Auto-Play Minecraft YouTube 'Trailer' Video",
                             description = "Automatically play the latest official @Minecraft YouTube videos containing 'Trailer' on the dashboard and turn off static wallpaper while playing",
                             checked = config.useYoutubeTrailerWallpaper || config.backgroundMode == HorizonBackgroundMode.YOUTUBE_TRAILER,
                             onCheckedChange = { enabled ->
