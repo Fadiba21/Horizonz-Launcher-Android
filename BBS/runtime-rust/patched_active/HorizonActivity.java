@@ -216,7 +216,7 @@ public final class HorizonActivity extends NativeActivity {
         }
         final String modelId = intent.getStringExtra("HORIZON_GEMINI_MODEL") != null
             ? intent.getStringExtra("HORIZON_GEMINI_MODEL")
-            : "gemini-2.5-flash";
+            : "gemini-4-argon";
         final boolean autoAssistChat = intent.getBooleanExtra("HORIZON_AI_AGENT_AUTO_CHAT", true);
         final boolean autonomousActions = intent.getBooleanExtra("HORIZON_AI_AGENT_AUTONOMOUS", true);
         final String taskPrompt = intent.getStringExtra("HORIZON_AI_AGENT_TASK") != null
@@ -383,10 +383,17 @@ public final class HorizonActivity extends NativeActivity {
         String userTrigger,
         boolean allowActions
     ) {
-        try {
-            String cleanModel = modelId.startsWith("models/") ? modelId.substring(7) : modelId;
-            String urlStr = "https://generativelanguage.googleapis.com/v1beta/models/" + cleanModel + ":generateContent?key=" + apiKey;
-            HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
+        String cleanModel = modelId.startsWith("models/") ? modelId.substring(7) : modelId;
+        String lower = cleanModel.toLowerCase();
+        String fallback1 = (lower.contains("argon") || lower.contains("ultra") || lower.contains("pro"))
+            ? "gemini-2.5-pro"
+            : (lower.contains("lite") ? "gemini-2.5-flash-lite" : "gemini-2.5-flash");
+        String[] candidates = new String[] { cleanModel, fallback1, "gemini-2.5-flash", "gemini-2.0-flash" };
+
+        for (String candidate : candidates) {
+            try {
+                String urlStr = "https://generativelanguage.googleapis.com/v1beta/models/" + candidate + ":generateContent?key=" + apiKey;
+                HttpURLConnection conn = (HttpURLConnection) new URL(urlStr).openConnection();
             conn.setRequestMethod("POST");
             conn.setDoOutput(true);
             conn.setConnectTimeout(8000);
@@ -431,8 +438,11 @@ public final class HorizonActivity extends NativeActivity {
                     .optJSONObject(0)
                     .optString("text", "")
                     .trim();
+                } else if (conn.getResponseCode() == 400 || conn.getResponseCode() == 401 || conn.getResponseCode() == 403) {
+                    break;
+                }
+            } catch (Exception ignored) {
             }
-        } catch (Exception ignored) {
         }
         return null;
     }
@@ -624,7 +634,7 @@ public final class HorizonActivity extends NativeActivity {
                     Os.setenv("HORIZON_CONTROL", controlFile.getAbsolutePath(), true);
                     Os.setenv("HORIZON_AI_AGENT_ENABLED", "1", true);
                     Os.setenv("HORIZON_AI_AGENT_PROVIDER", (aiProvider != null && !aiProvider.isEmpty()) ? aiProvider : "gemini", true);
-                    Os.setenv("HORIZON_GEMINI_MODEL", (geminiModel != null && !geminiModel.isEmpty()) ? geminiModel : "gemini-2.5-flash", true);
+                    Os.setenv("HORIZON_GEMINI_MODEL", (geminiModel != null && !geminiModel.isEmpty()) ? geminiModel : "gemini-4-argon", true);
                 } else {
                     Os.setenv("HORIZON_AI_AGENT_ENABLED", "0", true);
                 }

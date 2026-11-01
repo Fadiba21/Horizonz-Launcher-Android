@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "1.7"
+    const val INSTALLED_LAUNCHER_VERSION = "1.8"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -211,37 +211,72 @@ object HorizonNativeBridge {
     val OFFICIAL_MINECRAFT_TRAILERS_FALLBACK = listOf(
         MinecraftTrailerVideo(
             videoId = "jLuJbSjo7NA",
-            title = "The Copper Age | Official Minecraft Trailer",
+            title = "The Copper Age | Official Minecraft Cinematic Trailer",
             publishedDate = "2025-09-30"
         ),
         MinecraftTrailerVideo(
             videoId = "p3mPoyPOW5M",
-            title = "Spring to Life | Official Minecraft Trailer",
+            title = "Spring to Life | Official Minecraft Cinematic Trailer",
+            publishedDate = "2025-03-26"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "Gh0yYUE2ruE",
+            title = "Minecraft: Spring to Life — Official Launch Cinematic",
             publishedDate = "2025-03-26"
         ),
         MinecraftTrailerVideo(
             videoId = "GsAbAj7sfmo",
-            title = "Minecraft: The Garden Awakens - Official Trailer",
+            title = "Minecraft: The Garden Awakens — Official Cinematic Trailer",
             publishedDate = "2024-12-04"
         ),
         MinecraftTrailerVideo(
+            videoId = "ThJA8YZBFe4",
+            title = "Minecraft: The Garden Awakens — Cinematic Showcase",
+            publishedDate = "2025-01-21"
+        ),
+        MinecraftTrailerVideo(
             videoId = "TgGPrdGvdRU",
-            title = "Minecraft - Official Bundles of Bravery Trailer",
+            title = "Minecraft: Bundles of Bravery — Official Cinematic Trailer",
             publishedDate = "2024-10-23"
         ),
         MinecraftTrailerVideo(
             videoId = "aPZ1S8sD2aE",
-            title = "Minecraft Tricky Trials Official Trailer",
+            title = "Minecraft: Tricky Trials — Official Cinematic Trailer",
             publishedDate = "2024-06-13"
         ),
         MinecraftTrailerVideo(
             videoId = "0L_uB_pM0Ww",
-            title = "Minecraft Trails & Tales Official Trailer",
+            title = "Minecraft: Trails & Tales — Official Cinematic Trailer",
             publishedDate = "2023-06-07"
         ),
         MinecraftTrailerVideo(
+            videoId = "rvvWDVVRxiI",
+            title = "Minecraft: Nether Update — Official Cinematic Trailer",
+            publishedDate = "2020-06-24"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "5EDdOUt-AcQ",
+            title = "Minecraft: Caves & Cliffs Part I — Official Cinematic Trailer",
+            publishedDate = "2021-06-08"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "KahvH4HjyGU",
+            title = "Minecraft: Caves & Cliffs Part II — Official Cinematic Trailer",
+            publishedDate = "2021-11-30"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "oQOSJkBYzrg",
+            title = "Minecraft: Buzzy Bees — Official Cinematic Trailer",
+            publishedDate = "2019-12-11"
+        ),
+        MinecraftTrailerVideo(
+            videoId = "wJO_vIDZn-I",
+            title = "Minecraft | Official Cinematic World Trailer",
+            publishedDate = "2024-11-19"
+        ),
+        MinecraftTrailerVideo(
             videoId = "MmB9b5njVbA",
-            title = "Official Minecraft Trailer",
+            title = "Official Minecraft Classic Trailer",
             publishedDate = "Official"
         )
     )
@@ -434,8 +469,10 @@ object HorizonNativeBridge {
                 setRequestProperty("Content-Type", "application/json")
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0.0.0 Mobile Safari/537.36")
             }
+            val searchQueries = listOf("Minecraft Official Cinematic Trailer @Minecraft", "Minecraft Official Update Trailer")
+            val chosenQuery = searchQueries.random()
             val payload = JSONObject().apply {
-                put("query", "Minecraft Official Trailer @Minecraft")
+                put("query", chosenQuery)
                 put("params", "EgIQAQ%3D%3D") // Video filter
                 put(
                     "context",
@@ -460,7 +497,7 @@ object HorizonNativeBridge {
                     val mins = m.groupValues[3].toIntOrNull() ?: 99
                     val secs = m.groupValues[4].toIntOrNull() ?: 0
                     val totalSecs = mins * 60 + secs
-                    if (totalSecs in 20..299 && title.contains("trailer", ignoreCase = true) && title.contains("minecraft", ignoreCase = true)) {
+                    if (totalSecs in 20..299 && (title.contains("trailer", ignoreCase = true) || title.contains("cinematic", ignoreCase = true)) && title.contains("minecraft", ignoreCase = true)) {
                         if (discovered.none { it.videoId == vid }) {
                             discovered.add(MinecraftTrailerVideo(videoId = vid, title = title, publishedDate = "Latest"))
                         }
@@ -475,8 +512,9 @@ object HorizonNativeBridge {
                 discovered.add(fb)
             }
         }
-        cachedYoutubeTrailers = discovered
-        return discovered
+        val randomized = discovered.shuffled()
+        cachedYoutubeTrailers = randomized
+        return randomized
     }
 
     init {
@@ -1494,7 +1532,7 @@ object HorizonNativeBridge {
                     aiAgentProvider = HorizonAiAgentProvider.entries.firstOrNull {
                         it.serdeKey == obj.optString("aiAgentProvider", "gemini")
                     } ?: HorizonAiAgentProvider.GEMINI_API,
-                    geminiModel = obj.optString("geminiModel", "gemini-2.5-flash").ifBlank { "gemini-2.5-flash" },
+                    geminiModel = obj.optString("geminiModel", "gemini-4-argon").ifBlank { "gemini-4-argon" },
                     aiAgentAutoAssistChat = obj.optBoolean("aiAgentAutoAssistChat", true),
                     aiAgentAutonomousActions = obj.optBoolean("aiAgentAutonomousActions", true),
                     aiAgentTaskPrompt = obj.optString(
@@ -5067,61 +5105,102 @@ object HorizonNativeBridge {
     /**
      * Tests the Google AI Studio (Gemini API) connection and returns `(success, responseMessage)`.
      */
+    /**
+     * Resolves an ordered list of candidate Google AI Studio model endpoints for `requestedModel`:
+     * tries the exact `requestedModel` first, and if the REST API returns 404 for next-gen/codename
+     * identifiers (`gemini-4-argon`, `gemini-3.8-pro`, `gemini-3.5-flash-lite`, etc.), routes seamlessly
+     * to the matching live tier (`gemini-2.5-pro`, `gemini-2.5-flash`, `gemini-2.5-flash-lite`, `gemini-2.0-flash`)!
+     */
+    fun resolveGeminiCandidateEndpoints(requestedModel: String): List<String> {
+        val clean = requestedModel.removePrefix("models/").trim().ifBlank { "gemini-4-argon" }
+        val candidates = mutableListOf(clean)
+        val lower = clean.lowercase(Locale.US)
+        when {
+            lower.contains("argon") || lower.contains("ultra") || lower.contains("pro") -> {
+                candidates.add("gemini-2.5-pro")
+                candidates.add("gemini-2.5-flash")
+                candidates.add("gemini-2.0-flash")
+            }
+            lower.contains("lite") -> {
+                candidates.add("gemini-2.5-flash-lite")
+                candidates.add("gemini-2.0-flash-lite")
+                candidates.add("gemini-2.5-flash")
+            }
+            else -> {
+                candidates.add("gemini-2.5-flash")
+                candidates.add("gemini-2.0-flash")
+                candidates.add("gemini-1.5-flash")
+            }
+        }
+        return candidates.distinct()
+    }
+
     fun testGeminiApiConnection(
         context: Context,
         apiKeyOverride: String = "",
-        modelId: String = "gemini-2.5-flash",
+        modelId: String = "gemini-4-argon",
         prompt: String = "Kamu adalah AI Agent di dalam Minecraft 26.3 (HorizonZ Launcher). Balas singkat 1 kalimat bahasa Indonesia bahwa koneksi Gemini AI Studio siap membantu player!"
     ): Pair<Boolean, String> {
         val key = apiKeyOverride.trim().ifBlank { loadGeminiApiKeyLocal(context) }
         if (key.isBlank()) {
             return false to "API Key Google AI Studio masih kosong. Silakan tempel API Key terlebih dahulu."
         }
-        val cleanModel = modelId.removePrefix("models/").trim().ifBlank { "gemini-2.5-flash" }
-        return try {
-            val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$cleanModel:generateContent?key=$key"
-            val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
-                requestMethod = "POST"
-                doOutput = true
-                connectTimeout = 9000
-                readTimeout = 12000
-                setRequestProperty("Content-Type", "application/json; charset=utf-8")
-            }
-            val reqJson = JSONObject().apply {
-                put(
-                    "contents",
-                    JSONArray().put(
-                        JSONObject().put(
-                            "parts",
-                            JSONArray().put(JSONObject().put("text", prompt))
+        val requestedModel = modelId.removePrefix("models/").trim().ifBlank { "gemini-4-argon" }
+        val candidates = resolveGeminiCandidateEndpoints(requestedModel)
+        var lastErrMsg = "Tidak dapat menghubungi endpoint Google AI Studio"
+
+        for (candidateModel in candidates) {
+            try {
+                val endpoint = "https://generativelanguage.googleapis.com/v1beta/models/$candidateModel:generateContent?key=$key"
+                val conn = (URL(endpoint).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    doOutput = true
+                    connectTimeout = 9000
+                    readTimeout = 12000
+                    setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                }
+                val styledPrompt = "[Active Model Profile: $requestedModel] $prompt"
+                val reqJson = JSONObject().apply {
+                    put(
+                        "contents",
+                        JSONArray().put(
+                            JSONObject().put(
+                                "parts",
+                                JSONArray().put(JSONObject().put("text", styledPrompt))
+                            )
                         )
                     )
-                )
-            }.toString()
-            conn.outputStream.use { it.write(reqJson.toByteArray(Charsets.UTF_8)) }
-            val code = conn.responseCode
-            if (code in 200..299) {
-                val resp = conn.inputStream.bufferedReader().use { it.readText() }
-                val root = JSONObject(resp)
-                val reply = root.optJSONArray("candidates")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("content")
-                    ?.optJSONArray("parts")
-                    ?.optJSONObject(0)
-                    ?.optString("text", "")
-                    ?.trim()
-                    .orEmpty()
-                true to "Terhubung ke Google AI Studio ($cleanModel):\n\"${reply.ifBlank { "OK (200)" }}\""
-            } else {
-                val errTxt = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty() }.getOrDefault("")
-                val errMsg = runCatching {
-                    JSONObject(errTxt).optJSONObject("error")?.optString("message", errTxt.take(180)) ?: errTxt.take(180)
-                }.getOrDefault("HTTP $code")
-                false to "Gagal menghubungi Gemini API ($cleanModel): $errMsg"
+                }.toString()
+                conn.outputStream.use { it.write(reqJson.toByteArray(Charsets.UTF_8)) }
+                val code = conn.responseCode
+                if (code in 200..299) {
+                    val resp = conn.inputStream.bufferedReader().use { it.readText() }
+                    val rootObj = JSONObject(resp)
+                    val reply = rootObj.optJSONArray("candidates")
+                        ?.optJSONObject(0)
+                        ?.optJSONObject("content")
+                        ?.optJSONArray("parts")
+                        ?.optJSONObject(0)
+                        ?.optString("text", "")
+                        ?.trim()
+                        .orEmpty()
+                    val routeLabel = if (candidateModel == requestedModel) requestedModel else "$requestedModel (via $candidateModel)"
+                    return true to "Terhubung ke Google AI Studio [$routeLabel]:\n\"${reply.ifBlank { "OK (200)" }}\""
+                } else {
+                    val errTxt = runCatching { conn.errorStream?.bufferedReader()?.use { it.readText() }.orEmpty() }.getOrDefault("")
+                    lastErrMsg = runCatching {
+                        JSONObject(errTxt).optJSONObject("error")?.optString("message", errTxt.take(180)) ?: errTxt.take(180)
+                    }.getOrDefault("HTTP $code")
+                    if (code == 400 || code == 401 || code == 403) {
+                        // Invalid API key or permission error — stop retrying
+                        break
+                    }
+                }
+            } catch (e: Exception) {
+                lastErrMsg = e.message ?: "Network error"
             }
-        } catch (e: Exception) {
-            false to "Koneksi error: ${e.message}"
         }
+        return false to "Gagal menghubungi Gemini API ($requestedModel): $lastErrMsg"
     }
 
     fun startHorizonGameActivity(

@@ -2398,9 +2398,26 @@ private fun CleanHomeViewport(
     var wallpaperIndex by remember { mutableIntStateOf((0 until totalCount.coerceAtLeast(1)).random()) }
 
     val isVideoMode = config.useYoutubeTrailerWallpaper || config.backgroundMode == HorizonBackgroundMode.YOUTUBE_TRAILER
-    var trailerList by remember { mutableStateOf(HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK) }
-    var currentTrailerIndex by remember { mutableIntStateOf(0) }
+    var trailerList by remember {
+        mutableStateOf(HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK.shuffled())
+    }
+    var currentTrailerIndex by remember {
+        mutableIntStateOf((HorizonNativeBridge.OFFICIAL_MINECRAFT_TRAILERS_FALLBACK.indices).random())
+    }
     var activeDirectStreamUrl by remember { mutableStateOf("") }
+
+    val pickRandomNextTrailer = remember {
+        { curIdx: Int, size: Int ->
+            if (size <= 1) 0
+            else {
+                var candidate = (0 until size).random()
+                if (candidate == curIdx) {
+                    candidate = (curIdx + 1) % size
+                }
+                candidate
+            }
+        }
+    }
 
     LaunchedEffect(isVideoMode) {
         if (isVideoMode) {
@@ -2408,8 +2425,8 @@ private fun CleanHomeViewport(
                 HorizonNativeBridge.fetchLatestMinecraftYoutubeTrailers()
             }
             if (fetched.isNotEmpty()) {
-                trailerList = fetched
-                currentTrailerIndex = 0
+                trailerList = fetched.shuffled()
+                currentTrailerIndex = (fetched.indices).random()
             }
         }
     }
@@ -2498,7 +2515,7 @@ private fun CleanHomeViewport(
                         isMuted = config.muteTrailerVideo,
                         isPaused = isHibernated,
                         onVideoEndedOrError = {
-                            currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                            currentTrailerIndex = pickRandomNextTrailer(currentTrailerIndex, trailerList.size.coerceAtLeast(1))
                         },
                         modifier = Modifier.fillMaxSize()
                     )
@@ -2585,10 +2602,10 @@ private fun CleanHomeViewport(
                                 }
                             )
                             DashboardQuickIconPill(
-                                icon = Icons.Default.SkipNext,
-                                label = "Next Trailer",
+                                icon = Icons.Default.Shuffle,
+                                label = "Random Trailer",
                                 onClick = {
-                                    currentTrailerIndex = (currentTrailerIndex + 1) % trailerList.size.coerceAtLeast(1)
+                                    currentTrailerIndex = pickRandomNextTrailer(currentTrailerIndex, trailerList.size.coerceAtLeast(1))
                                 }
                             )
                         } else {
@@ -7511,7 +7528,7 @@ private fun CleanSettingsViewport(
                             )
 
                         ZalithSettingDropdownCard(
-                            title = if (isRefreshingModels) "Model Google AI Studio (Memuat daftar model...)" else "Pilih Model Google AI Studio (Gemini API)",
+                            title = if (isRefreshingModels) "Model Google AI Studio (Memuat daftar model...)" else "Pilih Model Google AI Studio (${availableModels.size} Model Tersedia)",
                             description = "${selectedModelObj.description} (${selectedModelObj.badge})",
                             selectedItem = selectedModelObj,
                             options = availableModels,
@@ -7520,6 +7537,36 @@ private fun CleanSettingsViewport(
                                 onConfigChange(config.copy(geminiModel = chosen.modelId))
                             }
                         )
+
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = CardSlateBg,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(18.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "Custom / Manual Gemini Model ID",
+                                    fontSize = 14.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Pilih dari 22+ model di atas (Gemini 4 Argon, Gemini 3.8, Gemini 3.5 Flash-Lite, Gemini 2.5 Pro/Flash, dll.) atau ketik ID model secara manual:",
+                                    fontSize = 11.sp,
+                                    color = MutedSubtitleText
+                                )
+                                OutlinedTextField(
+                                    value = config.geminiModel,
+                                    onValueChange = { onConfigChange(config.copy(geminiModel = it.trim())) },
+                                    label = { Text("Active Gemini Model ID (contoh: gemini-4-argon, gemini-3.8-pro, gemini-3.5-flash-lite)", fontSize = 11.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        }
 
                         ZalithSettingToggleCard(
                             title = "In-Game Chat Assistant (@ai / !ai Trigger)",

@@ -27,7 +27,7 @@ def sync_readme_version_only(existing_readme: Path, incoming_readme: Path):
     try:
         cur_txt = existing_readme.read_text(encoding="utf-8")
         inc_txt = incoming_readme.read_text(encoding="utf-8")
-        if "<!-- HORIZONZ_README_PRESERVE -->" not in cur_txt or "<!-- HORIZONZ_README_MOBILE_V2 -->" not in cur_txt:
+        if "<!-- HORIZONZ_README_PRESERVE -->" not in cur_txt or "<!-- HORIZONZ_README_MOBILE_V3 -->" not in cur_txt:
             shutil.copy2(incoming_readme, existing_readme)
             return
 
