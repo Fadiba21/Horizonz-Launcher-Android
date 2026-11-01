@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 1.10 APK (${{ matrix.abi }})
+    name: Build HorizonZ 2.0 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Clone Latest Vasysik/horizon-android Engine & Apply HorizonZ 1.10 Patches
+      - name: Clone Latest Vasysik/horizon-android Engine & Apply HorizonZ 2.0 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           git clone --depth 1 --branch android https://github.com/Vasysik/horizon-android.git /tmp/horizon-upstream
@@ -228,18 +228,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-1.10-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.0-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-1.10-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-1.10-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-2.0-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-2.0-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 1.10 Release APKs
+    name: Publish HorizonZ 2.0 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -259,15 +259,11 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v1.10.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v1.10 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v2.0.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v2.0 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            ## What's New in HorizonZ v1.10
-            - **Java compilation fix:** Corrected the malformed string literal in `HorizonActivity.java:260` by escaping the quote characters around `"error"` in the Gemini control-response check, removing the Java syntax error that blocked `compileReleaseJavaWithJavac`.
-            - **App version metadata:** Updated Android `versionCode` from `59` to `60`, `versionName` to `1.10.0-HorizonZ`, and the installed-launcher version label to `1.10`.
-            - **Build patch identification:** Updated the patch updater's User-Agent from `HorizonZ-CI/1.9` to `HorizonZ-CI/1.10`.
-
-            **Downloads:** Separate APKs for `arm64-v8a` and `armeabi-v7a`; `SHA256SUMS.txt` is included.
+            ## HorizonZ - Launcher v2.0 (Android Fork of `Vasysik/horizon-android` v0.7.6 & `horizon-rust/horizon` 26.3)
+            - **What's New — AI Dialog Lifecycle Cleanup (`HorizonActivity.java`)**: Added `dismissAiDialogsSafely()` to check, dismiss, and clear references for `aiCommandPanelDialog` and `aiFloatingButtonDialog` on return to the launcher and in `onDestroy()`, addressing the missing-method Java compilation failure in v1.10.
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt

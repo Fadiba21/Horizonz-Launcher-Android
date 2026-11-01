@@ -9,17 +9,16 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v1.10-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.0-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-v0.7.6-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
-[![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
 <!-- VERSION_BADGE_END -->
 
 </div>
 
 <!-- LATEST_VERSION_START -->
-> **HorizonZ v1.10 source update:** Fixes the invalid Java string literal at `HorizonActivity.java:260` that prevented `compileReleaseJavaWithJavac`, and updates the app version metadata. Existing v1.9 capabilities remain included, such as Gemini integration, cinematic playback, WGSL shader packs, and executable mods.
+> 🚀 **Latest Release — HorizonZ v2.0**: Adds AI dialog lifecycle cleanup in `HorizonActivity.java`. The new `dismissAiDialogsSafely()` method checks, dismisses, and clears `aiCommandPanelDialog` and `aiFloatingButtonDialog` when returning to the launcher and in `onDestroy()`, addressing the missing-method Java compilation failure in v1.10. Existing v1.10 features remain included.
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
@@ -62,23 +61,20 @@
 ### ✨ 6. Settings & AI Agent Integration (Google AI Studio / Gemini API)
 <img src="docs/screenshots/launcher-settings.jpg" alt="HorizonZ Settings & Gemini AI Agent" width="100%" />
 
-## 📥 APK Downloads & What's New
+## 📥 APK Download & Quick Start Guide
 
-### HorizonZ v1.10 APKs
-- **Target ABIs:** `HorizonZ-Launcher-1.10-arm64-v8a.apk` (64-bit ARMv8 devices) and `HorizonZ-Launcher-1.10-armeabi-v7a.apk` (32-bit ARMv7 devices).
-- **What's New in v1.10:**
-  - **Java compilation fix:** Corrected the malformed string literal in `HorizonActivity.java:260` by escaping the quote characters around `"error"` in the Gemini control-response check, removing the Java syntax error that blocked `compileReleaseJavaWithJavac`.
-  - **App version metadata:** Updated Android `versionCode` from `59` to `60`, `versionName` to `1.10.0-HorizonZ`, and the installed-launcher version label to `1.10`.
-  - **Build patch identification:** Updated the patch updater's User-Agent from `HorizonZ-CI/1.9` to `HorizonZ-CI/1.10`.
+### 📦 HorizonZ v2.0 APK Summary
+- **Target ABIs**: `HorizonZ-Launcher-2.0-arm64-v8a.apk` (64-bit ARMv8 devices) and `HorizonZ-Launcher-2.0-armeabi-v7a.apk` (32-bit ARMv7 devices).
+- **What's New — AI Dialog Lifecycle Cleanup (`HorizonActivity.java`)**: Added `dismissAiDialogsSafely()` to check, dismiss, and clear references for `aiCommandPanelDialog` and `aiFloatingButtonDialog` on return to the launcher and in `onDestroy()`, addressing the missing-method Java compilation failure in v1.10.
 
-### Quick Start
-1. **Install the APK:** Download the APK matching your device ABI (`arm64-v8a` or `armeabi-v7a`) from the [**Releases**](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) page.
-2. **Download 26.3 assets:** Open the **Game & Assets** tab and download the official Minecraft 26.3 assets until progress reaches **100%**.
-3. **Configure the AI Agent (Optional):** Open **Settings > AI Agent**, paste your API key from [Google AI Studio](https://aistudio.google.com/apikey) (saved locally on your device), choose a model (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, etc.), and tap **Test Gemini Connection**.
-4. **Launch and play:** Tap **PLAY** on the Dashboard to enter Minecraft 26.3; tap the **`✨ AI`** button at the top-left of the in-game screen or type `@ai <message>` in chat at any time to use the AI assistant.
+### 🚀 Quick Start Steps
+1. **Install the APK**: Download the APK matching your device ABI (`arm64-v8a` or `armeabi-v7a`) from the [**Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases) page.
+2. **Download 26.3 Assets**: Open the **Game & Assets** tab and download the official Minecraft 26.3 assets until progress reaches **100%**.
+3. **Configure AI Agent (Optional)**: Open **Settings > AI Agent**, paste your API key from [Google AI Studio](https://aistudio.google.com/apikey) (saved locally on your device), choose a model (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, etc.), and tap the **Test Gemini Connection** button.
+4. **Launch & Play**: Tap **PLAY** on the Dashboard to enter Minecraft 26.3; tap the **`✨ AI`** button at the top-left of the in-game screen or type `@ai <message>` in chat at any time to use the AI assistant.
 
 ## 📜 License & Credits
 
-- 🔗 **Fork Repository**: [Fadiba21/Horizonz-Launcher-Android](https://github.com/Fadiba21/Horizonz-Launcher-Android)
+- 🔗 **Fork Repository**: [Fadiba21/Horizonz-Launcher](https://github.com/Fadiba21/Horizonz-Launcher)
 - 📱 **Upstream Android Runtime**: [Vasysik/horizon-android](https://github.com/Vasysik/horizon-android) (`v0.7.6`)
 - 🦀 **Core Rust Engine**: [horizon-rust/horizon](https://github.com/horizon-rust/horizon) (`Apache-2.0`)

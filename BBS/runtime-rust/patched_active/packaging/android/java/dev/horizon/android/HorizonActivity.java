@@ -825,6 +825,29 @@ public final class HorizonActivity extends NativeActivity {
         }
     }
 
+    private void dismissAiDialogsSafely() {
+        try {
+            if (aiCommandPanelDialog != null) {
+                if (aiCommandPanelDialog.isShowing()) {
+                    aiCommandPanelDialog.dismiss();
+                }
+                aiCommandPanelDialog = null;
+            }
+        } catch (Exception ignored) {
+            aiCommandPanelDialog = null;
+        }
+        try {
+            if (aiFloatingButtonDialog != null) {
+                if (aiFloatingButtonDialog.isShowing()) {
+                    aiFloatingButtonDialog.dismiss();
+                }
+                aiFloatingButtonDialog = null;
+            }
+        } catch (Exception ignored) {
+            aiFloatingButtonDialog = null;
+        }
+    }
+
     private void returnToLauncherAndFinish() {
         watchdogRunning = false;
         dismissSplashDialogSafely();
