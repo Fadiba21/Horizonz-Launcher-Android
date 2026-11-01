@@ -658,6 +658,31 @@ def patch_ingame_ai_agent_and_native_mods():
             rs_path.write_text(content, encoding="utf-8")
             print(f"[HorizonZ Patch] Updated AI Agent / Gemini support in {rs_path}")
 
+    # (a.2) Pre-bundle genuine executable `.hmod` releases (containing `mod.wasm`) into `packaging/android/assets/builtin-mods/`
+    import urllib.request
+    builtin_mods_dir = Path("packaging/android/assets/builtin-mods")
+    builtin_mods_dir.mkdir(parents=True, exist_ok=True)
+    official_hmod_urls = {
+        "fps_overlay.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/fps_overlay-1.0.0/fps_overlay-1.0.0.hmod",
+        "zoom.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/zoom-1.0.0/zoom-1.0.0.hmod",
+        "keystrokes.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/keystrokes-1.0.0/keystrokes-1.0.0.hmod",
+        "minimap.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/minimap-1.0.0/minimap-1.0.0.hmod",
+        "coords_hud.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/coords_hud-0.1.0.hmod",
+        "recipes.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/recipes-1.0.0/recipes-1.0.0.hmod",
+        "mod_menu.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/mod_menu-0.1.1/mod_menu-0.1.1.hmod",
+        "blockscope.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/blockscope-0.1.0/blockscope-0.1.0.hmod",
+    }
+    for fname, url in official_hmod_urls.items():
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/1.9"})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+            if len(data) > 100 and data[:4] == b"PK\x03\x04":
+                (builtin_mods_dir / fname).write_bytes(data)
+                print(f"[HorizonZ Patch] Bundled genuine executable {fname} ({len(data)} bytes) into APK assets!")
+        except Exception as exc:
+            print(f"[HorizonZ Patch] Notice fetching {fname}: {exc}")
+
     # (b) Try applying official Horizon native mods (`zoom`, `fps_overlay`, `keystrokes`, `minimap`, `coords_hud`, `recipes`)
     #     via `horizon-mixins` with safe backup & rollback if upstream hook signatures differ
     backup_dir = Path("/tmp/horizon-client-pre-mixins-backup")

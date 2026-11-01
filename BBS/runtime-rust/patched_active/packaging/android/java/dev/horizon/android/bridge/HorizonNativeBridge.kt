@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "1.8"
+    const val INSTALLED_LAUNCHER_VERSION = "1.9"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -1729,7 +1729,8 @@ object HorizonNativeBridge {
                     "mouseTweaks" to config.extraMouseTweaks.toString(),
                     "mouseTweaksWheel" to config.extraMouseTweaks.toString(),
                     "sort" to config.extraInventorySort.toString(),
-                    "discordPresence" to config.discordRichPresence.toString()
+                    "discordPresence" to config.discordRichPresence.toString(),
+                    "agentControl" to config.aiAgentEnabled.toString()
                 )
             )
         }
@@ -2558,6 +2559,22 @@ object HorizonNativeBridge {
      * - Fixes `Stopped: horizon-mod.toml: missing` (when a `.hnmod` bundle only had `horizon-native.json` / `mixins/`)
      * - Preserves `mod.wasm` and all existing entries if already present!
      */
+    /**
+     * Maps official & reviewed code mods on `playhorizon.dev/mods` to their genuine executable
+     * `.hmod` WebAssembly release packages (containing `mod.wasm`), so Android (`Vasysik/horizon-android` v0.7.6)
+     * NEVER installs a source-only `2.0.0` `.hnmod` archive that lacks `mod.wasm`!
+     */
+    val OFFICIAL_EXECUTABLE_HMOD_URLS: Map<String, Pair<String, String>> = mapOf(
+        "fps_overlay" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/fps_overlay-1.0.0/fps_overlay-1.0.0.hmod"),
+        "zoom" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/zoom-1.0.0/zoom-1.0.0.hmod"),
+        "keystrokes" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/keystrokes-1.0.0/keystrokes-1.0.0.hmod"),
+        "minimap" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/minimap-1.0.0/minimap-1.0.0.hmod"),
+        "coords_hud" to ("0.1.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/coords_hud-0.1.0.hmod"),
+        "recipes" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/recipes-1.0.0/recipes-1.0.0.hmod"),
+        "mod_menu" to ("0.1.1" to "https://github.com/horizon-rust/horizon-mods/releases/download/mod_menu-0.1.1/mod_menu-0.1.1.hmod"),
+        "blockscope" to ("0.1.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/blockscope-0.1.0/blockscope-0.1.0.hmod")
+    )
+
     fun ensureValidHorizonModZip(
         targetFile: File,
         fallbackId: String,
@@ -2631,10 +2648,10 @@ object HorizonNativeBridge {
             val versionMatches = !forceUpdateVersion || fallbackVersion.isBlank() || existingVer == finalVersion
 
             if (hasTopLevelId && !hasSectionHeader && hasCapabilities && !wasStrippedByOldRepair) {
-                if (versionMatches) {
+                if (hasWasmBinary || versionMatches) {
+                    // Preserve genuine `.hmod` packages with `mod.wasm` 100% byte-for-byte untouched!
                     hasValidManifest = true
                 } else {
-                    // Only update `version = "..."` in-place while preserving 100% of original capabilities & experimental declarations!
                     preservedManifestText = manifestText.replace(
                         Regex("(?m)^(\\s*version\\s*=\\s*)\"[^\"]*\""),
                         "$1\"$finalVersion\""
@@ -2747,7 +2764,11 @@ object HorizonNativeBridge {
             Regex("(?m)^\\s*schema\\s*=\\s*1\\b").containsMatchIn(rootShadersToml) &&
             !Regex("(?m)^\\s*\\[shader\\]").containsMatchIn(rootShadersToml)
         val hasInvalidFragmentAttr = existingEntries.entries.any { (k, v) ->
-            k.endsWith(".wgsl", true) && v.toString(Charsets.UTF_8).contains("@fragment")
+            if (!k.endsWith(".wgsl", true)) false
+            else {
+                val wTxt = v.toString(Charsets.UTF_8)
+                wTxt.contains("@fragment") || wTxt.contains("ray_dir") || wTxt.contains("sun_direction") || wTxt.contains("sky_brightness")
+            }
         }
 
         if (isValidZip && hasValidRootManifest && !hasInvalidFragmentAttr) {
@@ -2776,23 +2797,23 @@ object HorizonNativeBridge {
             listOf(
                 "// Horizon 26.3 WGSL Sky Stage — $finalTitle (schema = 1, api = 0.1)",
                 "fn sky(input: SkyInput) -> vec4<f32> {",
-                "    let up = clamp(input.ray_dir.y, 0.0, 1.0);",
-                "    let sun_dot = clamp(dot(normalize(input.ray_dir), normalize(frame.sun_direction)), 0.0, 1.0);",
-                "    let horizon_glow = pow(1.0 - up, 3.0) * vec3<f32>(0.18, 0.32, 0.52) * frame.sky_brightness;",
-                "    let sun_halo = pow(sun_dot, 8.0) * vec3<f32>(0.35, 0.28, 0.16) * frame.sky_brightness;",
-                "    let boosted = input.color.rgb + horizon_glow * 0.28 + sun_halo * 0.35;",
-                "    return vec4<f32>(clamp(boosted, vec3<f32>(0.0), vec3<f32>(1.0)), input.color.a);",
+                "    let base = input.color.rgb;",
+                "    let luma = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));",
+                "    let horizon_band = clamp(1.0 - abs(luma - 0.48) * 2.0, 0.0, 1.0);",
+                "    let atmos_glow = vec3<f32>(0.16, 0.30, 0.50) * horizon_band * 0.22 * clamp(luma * 1.5, 0.0, 1.0);",
+                "    let vibrant_sky = mix(vec3<f32>(luma), base, 1.14) + atmos_glow;",
+                "    return vec4<f32>(clamp(vibrant_sky, vec3<f32>(0.0), vec3<f32>(1.0)), input.color.a);",
                 "}"
             ).joinToString("\n") + "\n"
         } else {
             listOf(
                 "// Horizon 26.3 WGSL Sky Stage — $finalTitle (schema = 1, api = 0.1)",
                 "fn sky(input: SkyInput) -> vec4<f32> {",
-                "    let horizon = pow(1.0 - clamp(abs(input.ray_dir.y), 0.0, 1.0), 2.4);",
-                "    let sun_dot = clamp(dot(normalize(input.ray_dir), normalize(frame.sun_direction)), 0.0, 1.0);",
-                "    let warm_tint = vec3<f32>(1.0, 0.62, 0.32) * horizon * 0.26 * frame.sky_brightness;",
-                "    let sun_bloom = vec3<f32>(1.0, 0.78, 0.44) * pow(sun_dot, 6.0) * 0.32 * frame.sky_brightness;",
-                "    let sky_rgb = clamp(input.color.rgb * vec3<f32>(1.04, 0.96, 0.88) + warm_tint + sun_bloom, vec3<f32>(0.0), vec3<f32>(1.0));",
+                "    let base = input.color.rgb;",
+                "    let luma = dot(base, vec3<f32>(0.2126, 0.7152, 0.0722));",
+                "    let horizon_band = clamp(1.0 - abs(luma - 0.52) * 2.2, 0.0, 1.0);",
+                "    let warm_tint = vec3<f32>(1.0, 0.64, 0.34) * horizon_band * 0.24 * clamp(luma * 1.6, 0.0, 1.0);",
+                "    let sky_rgb = clamp(base * vec3<f32>(1.05, 0.96, 0.88) + warm_tint, vec3<f32>(0.0), vec3<f32>(1.0));",
                 "    return vec4<f32>(sky_rgb, input.color.a);",
                 "}"
             ).joinToString("\n") + "\n"
@@ -2953,6 +2974,54 @@ object HorizonNativeBridge {
                     }
                 }
 
+                // Check if `canonicalFile` is an official code mod that lost `mod.wasm` (e.g. overwritten by a 2.0.0 `.hnmod`)
+                var hasWasmInside = false
+                runCatching {
+                    ZipFile(canonicalFile).use { zf ->
+                        val wasmEntry = zf.getEntry("mod.wasm")
+                        if (wasmEntry != null && wasmEntry.size > 8L) {
+                            hasWasmInside = true
+                        }
+                    }
+                }
+                if (!hasWasmInside && modId in OFFICIAL_EXECUTABLE_HMOD_URLS) {
+                    // 1. Try restoring genuine `.hmod` (with compiled `mod.wasm`) from bundled APK assets first!
+                    var restoredFromAssets = false
+                    runCatching {
+                        context.assets.open("builtin-mods/$modId.hmod").use { input ->
+                            FileOutputStream(canonicalFile).use { output ->
+                                input.copyTo(output)
+                            }
+                            restoredFromAssets = true
+                        }
+                    }
+                    // 2. If not in APK assets, fetch the genuine `.hmod` release in background if online
+                    if (!restoredFromAssets) {
+                        val targetUrl = OFFICIAL_EXECUTABLE_HMOD_URLS[modId]?.second
+                        if (!targetUrl.isNullOrBlank() && Thread.currentThread().name != "main") {
+                            runCatching {
+                                val conn = (URL(targetUrl).openConnection() as HttpURLConnection).apply {
+                                    connectTimeout = 6000
+                                    readTimeout = 8000
+                                    instanceFollowRedirects = true
+                                    setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION")
+                                }
+                                if (conn.responseCode in 200..299) {
+                                    val tmpDl = File(hmodDir, "$modId.hmod.dl.tmp")
+                                    conn.inputStream.use { inp ->
+                                        FileOutputStream(tmpDl).use { outp -> inp.copyTo(outp) }
+                                    }
+                                    if (tmpDl.length() > 100L) {
+                                        tmpDl.renameTo(canonicalFile)
+                                    } else {
+                                        tmpDl.delete()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Ensure `canonicalFile` is a 100% valid `.hmod` ZIP with `horizon-mod.toml`
                 ensureValidHorizonModZip(
                     targetFile = canonicalFile,
@@ -2999,7 +3068,58 @@ object HorizonNativeBridge {
                     cleanedLines.add("mod.$normId:$isEnabled")
                 }
             }
-            hmodsTxt.writeText(cleanedLines.joinToString("\n") + if (cleanedLines.isNotEmpty()) "\n" else "")
+            // Preserve or seed default keybinds in `horizon-mods.txt` for Zoom (`key.zoom.zoom:key.keyboard.c`)
+            val existingKeyLines = existingLines.filter { it.trim().startsWith("key.") }
+            val finalModLines = cleanedLines.toMutableList()
+            existingKeyLines.forEach { kl ->
+                if (kl !in finalModLines) finalModLines.add(kl)
+            }
+            if ("zoom" in seenModIds && finalModLines.none { it.startsWith("key.zoom.") }) {
+                finalModLines.add("key.zoom.zoom:key.keyboard.c")
+            }
+            hmodsTxt.writeText(finalModLines.joinToString("\n") + if (finalModLines.isNotEmpty()) "\n" else "")
+
+            // Seed `horizon-mods/.horizon-mod-data/` for official mods & `mod_menu` inventory feed
+            runCatching {
+                val modDataRoot = File(hmodDir, ".horizon-mod-data").apply { mkdirs() }
+                if ("fps_overlay" in seenModIds) {
+                    val fpsData = File(modDataRoot, "fps_overlay").apply { mkdirs() }
+                    if (!File(fpsData, "corner").exists()) File(fpsData, "corner").writeText("top-left")
+                    if (!File(fpsData, "lows").exists()) File(fpsData, "lows").writeText("true")
+                }
+                if ("keystrokes" in seenModIds) {
+                    val ksData = File(modDataRoot, "keystrokes").apply { mkdirs() }
+                    if (!File(ksData, "corner").exists()) File(ksData, "corner").writeText("top-left")
+                    if (!File(ksData, "cps").exists()) File(ksData, "cps").writeText("true")
+                }
+                if ("minimap" in seenModIds) {
+                    val mmData = File(modDataRoot, "minimap").apply { mkdirs() }
+                    if (!File(mmData, "corner").exists()) File(mmData, "corner").writeText("top-right")
+                    if (!File(mmData, "shape").exists()) File(mmData, "shape").writeText("round")
+                }
+                if ("zoom" in seenModIds) {
+                    val zmData = File(modDataRoot, "zoom").apply { mkdirs() }
+                    if (!File(zmData, "level").exists()) File(zmData, "level").writeText("4.0")
+                    if (!File(zmData, "smooth").exists()) File(zmData, "smooth").writeText("true")
+                }
+                val mmMenuDir = File(modDataRoot, "mod_menu").apply { mkdirs() }
+                val invArr = JSONArray()
+                hmodDir.listFiles()?.filter { it.isFile && it.name.endsWith(".hmod", true) }?.forEach { mf ->
+                    val mInfo = inspectModPackage(mf)
+                    val mEnabled = sanitizeModId(mf.name) !in disabledIds
+                    invArr.put(
+                        JSONObject().apply {
+                            put("id", mInfo.modId)
+                            put("name", mInfo.displayName)
+                            put("version", mInfo.version)
+                            put("description", mInfo.description)
+                            put("enabled", mEnabled)
+                            put("kind", if (mInfo.hasWasmBinary) "sandboxed" else "content")
+                        }
+                    )
+                }
+                File(mmMenuDir, "inventory.json").writeText(JSONObject().put("mods", invArr).toString(2))
+            }
 
             // Also sync built-in native HUD/input hooks in `horizon-extras.txt` for enabled official mods
             val enabledSet = seenModIds.filter { it !in disabledIds }.toSet()
@@ -3927,8 +4047,13 @@ object HorizonNativeBridge {
                             val gameVer = vObj.optString("game", "26.3")
                             val sideStr = vObj.optString("side", "client")
                             val fileObj = vObj.optJSONObject("file")
-                            val fUrl = fileObj?.optString("url", "")?.takeIf { it.isNotBlank() }
+                            val rawFUrl = fileObj?.optString("url", "")?.takeIf { it.isNotBlank() }
                                 ?: vObj.optString("url", "https://github.com/horizon-rust/horizon-mods/releases/download/$rawId-$vNum/$rawId-$vNum.hmod")
+                            val fUrl = if (rawFUrl.endsWith(".hnmod", ignoreCase = true) && id in OFFICIAL_EXECUTABLE_HMOD_URLS) {
+                                OFFICIAL_EXECUTABLE_HMOD_URLS[id]!!.second
+                            } else {
+                                rawFUrl
+                            }
                             val fName = when (category) {
                                 StoreCategory.MOD, StoreCategory.NATIVE_MOD -> "$id.hmod"
                                 else -> fileObj?.optString("name", "$id-$vNum.zip") ?: "$id-$vNum.zip"
@@ -4189,16 +4314,37 @@ object HorizonNativeBridge {
                 }
             }
             else -> {
-                // ALWAYS build a valid `.hmod` ZIP archive with root `horizon-mod.toml` (NEVER plain text!)
-                ensureValidHorizonModZip(
+                val cleanId = sanitizeModId(item.id)
+                val officialUrl = OFFICIAL_EXECUTABLE_HMOD_URLS[cleanId]?.second
+                var fetchedRealWasm = false
+                if (!officialUrl.isNullOrBlank()) {
+                    runCatching {
+                        val conn = (URL(officialUrl).openConnection() as HttpURLConnection).apply {
+                            connectTimeout = 7000
+                            readTimeout = 9000
+                            instanceFollowRedirects = true
+                            setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION")
+                        }
+                        if (conn.responseCode in 200..299) {
+                            conn.inputStream.use { inp ->
+                                FileOutputStream(targetFile).use { outp -> inp.copyTo(outp) }
+                            }
+                            if (targetFile.length() > 100L) fetchedRealWasm = true
+                        }
+                    }
+                }
+                if (!fetchedRealWasm) {
+                    // ALWAYS build a valid `.hmod` ZIP archive with root `horizon-mod.toml` (NEVER plain text!)
+                    ensureValidHorizonModZip(
                     targetFile = targetFile,
                     fallbackId = item.id,
                     fallbackTitle = item.title,
                     fallbackVersion = item.version,
                     fallbackSummary = item.summary,
                     fallbackAuthor = item.author,
-                    forceUpdateVersion = true
-                )
+                        forceUpdateVersion = false
+                    )
+                }
             }
         }
     }
