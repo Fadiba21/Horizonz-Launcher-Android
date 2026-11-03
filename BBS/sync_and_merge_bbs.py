@@ -135,6 +135,11 @@ def sync_upstream_into_bbs(upstream_dir: Path | None = None):
     state_payload = {
         "upstream_repo": "https://github.com/Vasysik/horizon-android",
         "upstream_branch": "android",
+        "upstream_base_commit": "bef1eff277871f7be5bc0eed944eb76565188809",
+        "upstream_target_commit": "125c67284343d649b92ac5b3f9eb5a50f56328ca",
+        "upstream_compare_range": "bef1eff277871f7be5bc0eed944eb76565188809...125c67284343d649b92ac5b3f9eb5a50f56328ca",
+        "upstream_release_tag": "v0.7.7-candidate-125c672",
+        "horizonz_version": "2.1",
         "updated_files_in_last_sync": updated_files,
         "upstream_hashes": new_hashes,
     }

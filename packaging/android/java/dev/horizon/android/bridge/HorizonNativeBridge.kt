@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "2.0"
+    const val INSTALLED_LAUNCHER_VERSION = "2.1"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -1906,7 +1906,7 @@ object HorizonNativeBridge {
                     }
                 }
                 val hmodFile = File(profileHome, "hmod_list.json").takeIf { it.exists() } ?: File(home, "hmod_list.json")
-                if (!hmodFile.exists()) return true
+                if (!hmodFile.exists()) return modId !in OPT_IN_BUNDLED_MOD_IDS
                 runCatching {
                     val obj = JSONObject(hmodFile.readText())
                     val disabled = obj.optJSONArray("disabled") ?: return true
@@ -1995,6 +1995,7 @@ object HorizonNativeBridge {
                         "zoom" -> extraUpdates["zoom"] = enabled.toString()
                         "minimap" -> extraUpdates["minimap"] = enabled.toString()
                         "coords_hud", "coordinates_hud" -> extraUpdates["coordsHud"] = enabled.toString()
+                        "smartf3", "smart_f3" -> extraUpdates["smartF3"] = enabled.toString()
                         "mousetricks", "mouse_tweaks" -> {
                             extraUpdates["mouseTweaks"] = enabled.toString()
                             extraUpdates["mouseTweaksWheel"] = enabled.toString()
@@ -2061,12 +2062,27 @@ object HorizonNativeBridge {
         appendSystemLog("${if (enabled) "Enabled" else "Disabled"} $folder item: $fileName", logEnabled, context)
     }
 
-    fun openSystemFilesApp(context: Context) {
+    fun isGameCurrentlyRunning(context: Context): Boolean {
+        val lockFile = File(context.filesDir, "zalith-game-running.lock")
+        if (!lockFile.exists()) return false
+        val ageMs = System.currentTimeMillis() - lockFile.lastModified()
+        return ageMs in 0L..(6L * 3600L * 1000L)
+    }
+
+    fun openSystemFilesApp(context: Context, subDocumentId: String = "root") {
+        if ((subDocumentId == "root/saves" || subDocumentId.startsWith("root/saves/")) && isGameCurrentlyRunning(context)) {
+            Toast.makeText(context, "World folder access is blocked while Minecraft is running. Return to the launcher first.", Toast.LENGTH_LONG).show()
+            return
+        }
         try {
             val authority = "${context.packageName}.documents"
-            val rootUri = DocumentsContract.buildRootUri(authority, "horizon_root")
+            val targetUri = if (subDocumentId == "root" || subDocumentId.isBlank()) {
+                DocumentsContract.buildRootUri(authority, "horizon_root")
+            } else {
+                DocumentsContract.buildDocumentUri(authority, subDocumentId)
+            }
             val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(rootUri, DocumentsContract.Document.MIME_TYPE_DIR)
+                setDataAndType(targetUri, DocumentsContract.Document.MIME_TYPE_DIR)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
             }
             context.startActivity(intent)
@@ -2078,6 +2094,14 @@ object HorizonNativeBridge {
                 Toast.makeText(context, "Files directory: ${context.filesDir.absolutePath}", Toast.LENGTH_LONG).show()
             }
         }
+    }
+
+    fun openWorldFolderInSystemFiles(context: Context) {
+        openSystemFilesApp(context, "root/saves")
+    }
+
+    fun openConfigFolderInSystemFiles(context: Context) {
+        openSystemFilesApp(context, "root/Configuration")
     }
 
     fun exportPerformanceReport(context: Context, profileSlot: Int = 0) {
@@ -2335,6 +2359,12 @@ object HorizonNativeBridge {
             val root26 = File(home, ".local/horizon-client/26.3")
             root26.mkdirs()
 
+            // Invalidate stale derived block-behaviour data after engine updates (0.7.7 cache compatibility)
+            listOf("block-behaviour.bin", "block-behaviour-cache.bin", "derived-block-behaviour.bin").forEach { cacheName ->
+                val cf = File(root26, cacheName)
+                if (cf.exists() && cf.length() == 0L) cf.delete()
+            }
+
             val engineZip = File(home, "engine-data.zip")
             var repairedFromBundle = 0
             if (engineZip.exists() && engineZip.length() > 1024L) {
@@ -2564,6 +2594,13 @@ object HorizonNativeBridge {
      * `.hmod` WebAssembly release packages (containing `mod.wasm`), so Android (`Vasysik/horizon-android` v0.7.6)
      * NEVER installs a source-only `2.0.0` `.hnmod` archive that lacks `mod.wasm`!
      */
+    /**
+     * Opt-in built-in mods from Vasysik/horizon-android 0.7.7 (`bef1eff...125c672`):
+     * Zoom, Minimap, Recipes, and SmartF3 are staged in Mods with Enable/Disable controls
+     * and remain disabled by default until explicitly enabled by the user.
+     */
+    val OPT_IN_BUNDLED_MOD_IDS: Set<String> = setOf("zoom", "minimap", "recipes", "smartf3")
+
     val OFFICIAL_EXECUTABLE_HMOD_URLS: Map<String, Pair<String, String>> = mapOf(
         "fps_overlay" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/fps_overlay-1.0.0/fps_overlay-1.0.0.hmod"),
         "zoom" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/zoom-1.0.0/zoom-1.0.0.hmod"),
@@ -2571,6 +2608,7 @@ object HorizonNativeBridge {
         "minimap" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/minimap-1.0.0/minimap-1.0.0.hmod"),
         "coords_hud" to ("0.1.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/coords_hud-0.1.0.hmod"),
         "recipes" to ("1.0.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/recipes-1.0.0/recipes-1.0.0.hmod"),
+        "smartf3" to ("0.1.0" to "https://github.com/d3grando/smartf3/releases/download/v0.1.0/smartf3-0.1.0.hmod"),
         "mod_menu" to ("0.1.1" to "https://github.com/horizon-rust/horizon-mods/releases/download/mod_menu-0.1.1/mod_menu-0.1.1.hmod"),
         "blockscope" to ("0.1.0" to "https://github.com/horizon-rust/horizon-mods/releases/download/blockscope-0.1.0/blockscope-0.1.0.hmod")
     )
@@ -2908,6 +2946,54 @@ object HorizonNativeBridge {
         listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
             val hmodDir = File(base, "horizon-mods").apply { mkdirs() }
             val legacyModsDir = File(base, "mods").apply { mkdirs() }
+
+            // 0. Seed 0.7.7 opt-in built-in mods (`zoom`, `minimap`, `recipes`, `smartf3`) disabled by default on first setup
+            val optInSeedFlag = File(base, "zalith-optin-bundled-mods-v21.flag")
+            if (!optInSeedFlag.exists()) {
+                val hmodListInit = File(base, "hmod_list.json")
+                val disabledArr = runCatching {
+                    if (hmodListInit.exists()) JSONObject(hmodListInit.readText()).optJSONArray("disabled") ?: JSONArray()
+                    else JSONArray()
+                }.getOrDefault(JSONArray())
+                val existingDisabled = mutableSetOf<String>()
+                for (i in 0 until disabledArr.length()) {
+                    existingDisabled.add(sanitizeModId(disabledArr.optString(i)))
+                }
+                val hmodsTxtInit = File(base, "horizon-mods.txt")
+                val existingTxtIds = if (hmodsTxtInit.exists()) {
+                    hmodsTxtInit.readLines().mapNotNull { l ->
+                        val t = l.trim()
+                        if (t.startsWith("mod.") && t.contains(":")) sanitizeModId(t.substringAfter("mod.").substringBefore(":")) else null
+                    }.toSet()
+                } else emptySet()
+
+                for (bundledId in OPT_IN_BUNDLED_MOD_IDS) {
+                    val targetHmod = File(hmodDir, "$bundledId.hmod")
+                    if (!targetHmod.exists()) {
+                        var copiedFromAsset = false
+                        runCatching {
+                            context.assets.open("builtin-mods/$bundledId.hmod").use { inp ->
+                                FileOutputStream(targetHmod).use { outp -> inp.copyTo(outp) }
+                                copiedFromAsset = true
+                            }
+                        }
+                        if (!copiedFromAsset) {
+                            ensureValidHorizonModZip(targetFile = targetHmod, fallbackId = bundledId)
+                        }
+                    }
+                    // Keep disabled by default unless user already configured this mod in `horizon-mods.txt`
+                    if (bundledId !in existingTxtIds && bundledId !in existingDisabled) {
+                        disabledArr.put(bundledId)
+                        existingDisabled.add(bundledId)
+                    }
+                }
+                runCatching {
+                    val outObj = if (hmodListInit.exists()) JSONObject(hmodListInit.readText()) else JSONObject()
+                    outObj.put("disabled", disabledArr)
+                    hmodListInit.writeText(outObj.toString(2))
+                    optInSeedFlag.writeText("2.1")
+                }
+            }
 
             // 1. Move any `.hmod` or `.hnmod` from `mods/` into `horizon-mods/` so there is only 1 canonical folder
             legacyModsDir.listFiles()?.forEach { f ->

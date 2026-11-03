@@ -97,6 +97,13 @@ public final class HorizonActivity extends NativeActivity {
 
         tokenFile.delete();
         exitFlag.delete();
+        try {
+            File runningLock = new File(homeDir, "zalith-game-running.lock");
+            try (FileOutputStream fos = new FileOutputStream(runningLock, false)) {
+                fos.write("running".getBytes(StandardCharsets.UTF_8));
+            }
+        } catch (Exception ignored) {
+        }
 
         writeBootMilestone(homeDir, "15|Initializing HorizonZ Native Runtime...");
 
@@ -850,6 +857,13 @@ public final class HorizonActivity extends NativeActivity {
 
     private void returnToLauncherAndFinish() {
         watchdogRunning = false;
+        try {
+            File homeDir = getFilesDir();
+            if (homeDir != null) {
+                new File(homeDir, "zalith-game-running.lock").delete();
+            }
+        } catch (Exception ignored) {
+        }
         dismissSplashDialogSafely();
         dismissAiDialogsSafely();
         try {
@@ -880,6 +894,13 @@ public final class HorizonActivity extends NativeActivity {
     @Override
     protected void onDestroy() {
         watchdogRunning = false;
+        try {
+            File homeDir = getFilesDir();
+            if (homeDir != null) {
+                new File(homeDir, "zalith-game-running.lock").delete();
+            }
+        } catch (Exception ignored) {
+        }
         dismissSplashDialogSafely();
         dismissAiDialogsSafely();
         super.onDestroy();
@@ -925,8 +946,11 @@ public final class HorizonActivity extends NativeActivity {
             File homeDir = getFilesDir();
             if (homeDir == null) return;
             if (!homeDir.exists()) homeDir.mkdirs();
+            final String expectedStamp = "2.1-0.7.7-125c672";
+            File stampFile = new File(homeDir, "engine-data-version.txt");
+            String currentStamp = stampFile.exists() ? readSmallTextFile(stampFile) : "";
             File engineZip = new File(homeDir, "engine-data.zip");
-            if (!engineZip.exists() || engineZip.length() < 1024) {
+            if (!engineZip.exists() || engineZip.length() < 1024 || !expectedStamp.equals(currentStamp)) {
                 try (InputStream in = getAssets().open("engine-data.zip");
                      FileOutputStream out = new FileOutputStream(engineZip)) {
                     byte[] buf = new byte[65536];
@@ -934,6 +958,22 @@ public final class HorizonActivity extends NativeActivity {
                     while ((len = in.read(buf)) > 0) {
                         out.write(buf, 0, len);
                     }
+                }
+                // Invalidate stale derived block-behaviour cache files across engine updates (0.7.7 cache compatibility)
+                File root26 = new File(homeDir, ".local/horizon-client/26.3");
+                if (root26.isDirectory()) {
+                    String[] staleCaches = new String[] {
+                        "block-behaviour.bin",
+                        "block-behaviour-cache.bin",
+                        "derived-block-behaviour.bin"
+                    };
+                    for (String sc : staleCaches) {
+                        File f = new File(root26, sc);
+                        if (f.exists()) f.delete();
+                    }
+                }
+                try (FileOutputStream fos = new FileOutputStream(stampFile, false)) {
+                    fos.write(expectedStamp.getBytes(StandardCharsets.UTF_8));
                 }
             }
         } catch (Exception e) {

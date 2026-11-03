@@ -61,6 +61,7 @@ def ensure_upstream_include_assets():
         for rs_rel, rel_to_root, resolved_path in missing_rel_paths:
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
             urls = [
+                f"https://raw.githubusercontent.com/Vasysik/horizon-android/125c67284343d649b92ac5b3f9eb5a50f56328ca/{rel_to_root}",
                 f"https://raw.githubusercontent.com/Vasysik/horizon-android/android/{rel_to_root}",
                 f"https://raw.githubusercontent.com/horizon-rust/horizon/main/{rel_to_root}",
             ]
@@ -83,7 +84,11 @@ def ensure_upstream_include_assets():
                 clone_tmp = Path("/tmp/horizon-upstream-docs-recovery")
                 shutil.rmtree(clone_tmp, ignore_errors=True)
                 subprocess.run(
-                    ["git", "clone", "--depth", "1", "--branch", "android", "https://github.com/Vasysik/horizon-android.git", str(clone_tmp)],
+                    ["git", "clone", "--branch", "android", "https://github.com/Vasysik/horizon-android.git", str(clone_tmp)],
+                    check=False,
+                )
+                subprocess.run(
+                    ["git", "-C", str(clone_tmp), "checkout", "125c67284343d649b92ac5b3f9eb5a50f56328ca"],
                     check=False,
                 )
                 candidate = clone_tmp / rel_to_root
@@ -669,12 +674,13 @@ def patch_ingame_ai_agent_and_native_mods():
         "minimap.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/minimap-1.0.0/minimap-1.0.0.hmod",
         "coords_hud.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/coords_hud-0.1.0/coords_hud-0.1.0.hmod",
         "recipes.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/recipes-1.0.0/recipes-1.0.0.hmod",
+        "smartf3.hmod": "https://github.com/d3grando/smartf3/releases/download/v0.1.0/smartf3-0.1.0.hmod",
         "mod_menu.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/mod_menu-0.1.1/mod_menu-0.1.1.hmod",
         "blockscope.hmod": "https://github.com/horizon-rust/horizon-mods/releases/download/blockscope-0.1.0/blockscope-0.1.0.hmod",
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.1"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":

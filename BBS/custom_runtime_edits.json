@@ -1,7 +1,7 @@
 {
   "upstream_repo": "https://github.com/Vasysik/horizon-android.git",
   "upstream_branch": "android",
-  "version": "1.4.0-HorizonZ",
+  "version": "2.1.0-HorizonZ",
   "tracked_runtime_files": [
     "crates/horizon-android/Cargo.toml",
     "crates/horizon-android/src/lib.rs",
@@ -36,5 +36,7 @@
       "target_file": "crates/horizon-client/src/android_main.rs",
       "description": "Export JNI functions nativeIsGameInstalled, nativeStartOfficialInstall, and nativeGetInstallProgress with pause/resume/cancel & speed logging."
     }
-  ]
+  ],
+  "upstream_base_commit": "bef1eff277871f7be5bc0eed944eb76565188809",
+  "upstream_target_commit": "125c67284343d649b92ac5b3f9eb5a50f56328ca"
 }

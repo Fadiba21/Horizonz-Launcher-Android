@@ -876,9 +876,7 @@ pub extern "system" fn Java_dev_horizon_android_bridge_HorizonNativeBridge_nativ
     );
     let _ = fs::write(
         home_path.join("zalith-install-log.txt"),
-        "[Installer] Initializing Minecraft 26.3 official asset installer...
-[GET] https://piston-meta.mojang.com/mc/game/version_manifest_v2.json
-",
+        "[Installer] Initializing Minecraft 26.3 official asset installer...\n[GET] https://piston-meta.mojang.com/mc/game/version_manifest_v2.json\n",
     );
 
     std::thread::spawn(move || {

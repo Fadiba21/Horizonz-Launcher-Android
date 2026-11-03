@@ -11,6 +11,9 @@
     "crates/horizon-android/src/lib.rs": "f8b36bf80c810911ddeb70075e9f8e7969469599cc15a35bde046d13d4901733",
     "packaging/android/bedrock-controls.json": "c7302b2d98bf2e989c367ba8da6807c6981099e0c73b83ad42ad54fb9d2926a3"
   },
-  "upstream_release_tag": "v0.7.6",
-  "horizonz_version": "2.0"
+  "upstream_release_tag": "v0.7.7-candidate-125c672",
+  "horizonz_version": "2.1",
+  "upstream_base_commit": "bef1eff277871f7be5bc0eed944eb76565188809",
+  "upstream_target_commit": "125c67284343d649b92ac5b3f9eb5a50f56328ca",
+  "upstream_compare_range": "bef1eff277871f7be5bc0eed944eb76565188809...125c67284343d649b92ac5b3f9eb5a50f56328ca"
 }
