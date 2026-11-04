@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 2.1 APK (${{ matrix.abi }})
+    name: Build HorizonZ 2.2 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Checkout Pinned Vasysik/horizon-android (125c672) & Apply HorizonZ 2.1 Patches
+      - name: Checkout Pinned Vasysik/horizon-android (125c672) & Apply HorizonZ 2.2 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           UPSTREAM_TARGET_COMMIT="125c67284343d649b92ac5b3f9eb5a50f56328ca"
@@ -186,7 +186,7 @@ jobs:
           TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export HORIZON_ANDROID_PUBLIC=1
-          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz21')"
+          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz22')"
           export HORIZON_ANDROID_BUILD_DIRTY="false"
           export CARGO_PROFILE_RELEASE_LTO=false
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -236,18 +236,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.1-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.2-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-2.1-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-2.1-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-2.2-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-2.2-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 2.1 Release APKs
+    name: Publish HorizonZ 2.2 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -267,14 +267,13 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v2.1.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v2.1 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v2.2.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v2.2 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            ## What's New in v2.1
-            - **Pinned upstream runtime:** Uses `Vasysik/horizon-android` commit `125c67284343d649b92ac5b3f9eb5a50f56328ca` (0.7.7 candidate); a version stamp refreshes `engine-data.zip` and clears stale derived block-behaviour caches after an update.
-            - **Optional built-in mods:** Stages `Zoom`, `Minimap`, `Recipes`, and `SmartF3` with enable/disable controls; all are disabled by default.
-            - **Protected Android Files access:** Exposes `Configuration` and `saves` (Worlds), blocks save access while the game process is active, and hides account and API-key files.
-            - **v2.0 customizations retained:** Keeps the Gemini API Agent and in-game `✨ AI` HUD, WGSL shader packs, randomized cinematic/trailer player, and 3D Skin Studio.
+            ## What's New in v2.2
+            - **Optional Liquid Glass theme:** Adds an interactive Liquid Glass palette with refraction and spring effects; Monet / Material You remains the default. Android 13+ can use the AGSL shader path, with a Compose drawing fallback on older versions.
+            - **Searchable Gemini model picker:** Replaces the settings dropdown with a searchable dialog that pairs display names with model IDs, and adds Gemini 3.1 Pro Preview and Gemini 3.1 Flash-Lite Preview entries.
+            - **Cleaner game handoff:** After starting the separate game activity, the launcher releases its retained resources, removes its own task, and terminates its process to reduce background resource use during play.
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt

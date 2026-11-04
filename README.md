@@ -9,7 +9,7 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.1-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.2-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-v0.7.7_125c672-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
@@ -18,7 +18,7 @@
 </div>
 
 <!-- LATEST_VERSION_START -->
-> 🚀 **Latest Update — HorizonZ v2.1**: Integrates the bounded upstream `Vasysik/horizon-android` range `bef1eff277871f7be5bc0eed944eb76565188809...125c67284343d649b92ac5b3f9eb5a50f56328ca` (`0.7.7` candidate), pinning the upstream engine checkout to commit `125c67284343d649b92ac5b3f9eb5a50f56328ca`, staging **opt-in built-in mods (`Zoom`, `Minimap`, `Recipes`, `SmartF3`) disabled by default**, exposing **protected `Configuration` and `saves` (Worlds) access via Android Files** (blocking world access while `:game` is running and hiding account/API-key files), and refreshing version-stamped `engine-data.zip` tables while preserving all HorizonZ `v2.0` capabilities (**Google AI Studio / Gemini API Agent**, **WGSL Shader Packs**, **Random Cinematic & Trailer Player**, and **3D Skin Studio**).
+> 🚀 **Latest Update — HorizonZ v2.2**: Adds an optional **Liquid Glass** theme while keeping **Monet / Material You** as the default, a searchable Gemini model picker with Gemini 3.1 preview entries, and a launcher cleanup step that releases memory, removes the launcher task, and exits the launcher process after handoff to the separate game process.
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
@@ -63,13 +63,13 @@
 
 ## 📥 APK Download & Quick Start Guide
 
-### 📦 HorizonZ v2.1 APK Summary
-- **Target ABIs**: `HorizonZ-Launcher-2.1-arm64-v8a.apk` (64-bit ARMv8 devices) and `HorizonZ-Launcher-2.1-armeabi-v7a.apk` (32-bit ARMv7 devices).
-#### What's New in v2.1
-- **Pinned upstream runtime:** Uses `Vasysik/horizon-android` commit `125c67284343d649b92ac5b3f9eb5a50f56328ca` (0.7.7 candidate); a version stamp refreshes `engine-data.zip` and clears stale derived block-behaviour caches after an update.
-- **Optional built-in mods:** Stages `Zoom`, `Minimap`, `Recipes`, and `SmartF3` with enable/disable controls; all are disabled by default.
-- **Protected Android Files access:** Exposes `Configuration` and `saves` (Worlds), blocks save access while the game process is active, and hides account and API-key files.
-- **v2.0 customizations retained:** Keeps the Gemini API Agent and in-game `✨ AI` HUD, WGSL shader packs, randomized cinematic/trailer player, and 3D Skin Studio.
+### 📦 HorizonZ v2.2 APK Summary
+- **Target ABIs**: `HorizonZ-Launcher-2.2-arm64-v8a.apk` (64-bit ARMv8 devices) and `HorizonZ-Launcher-2.2-armeabi-v7a.apk` (32-bit ARMv7 devices).
+- **What's New in v2.2**:
+  - **Optional Liquid Glass theme:** Adds an interactive Liquid Glass palette with refraction and spring effects; Monet / Material You remains the default. Android 13+ can use the AGSL shader path, with a Compose drawing fallback on older versions.
+  - **Searchable Gemini model picker:** Replaces the settings dropdown with a searchable dialog that pairs display names with model IDs, and adds Gemini 3.1 Pro Preview and Gemini 3.1 Flash-Lite Preview entries.
+  - **Cleaner game handoff:** After starting the separate game activity, the launcher releases its retained resources, removes its own task, and terminates its process to reduce background resource use during play.
+
 ### 🚀 Quick Start Steps
 1. **Install the APK**: Download the APK matching your device ABI (`arm64-v8a` or `armeabi-v7a`) from the [**Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases) page.
 2. **Download 26.3 Assets**: Open the **Game & Assets** tab and download the official Minecraft 26.3 assets until progress reaches **100%**.

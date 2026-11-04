@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "2.1"
+    const val INSTALLED_LAUNCHER_VERSION = "2.2"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -1532,7 +1532,7 @@ object HorizonNativeBridge {
                     aiAgentProvider = HorizonAiAgentProvider.entries.firstOrNull {
                         it.serdeKey == obj.optString("aiAgentProvider", "gemini")
                     } ?: HorizonAiAgentProvider.GEMINI_API,
-                    geminiModel = obj.optString("geminiModel", "gemini-4-argon").ifBlank { "gemini-4-argon" },
+                    geminiModel = normalizeGeminiModelId(obj.optString("geminiModel", "gemini-4-argon")),
                     aiAgentAutoAssistChat = obj.optBoolean("aiAgentAutoAssistChat", true),
                     aiAgentAutonomousActions = obj.optBoolean("aiAgentAutonomousActions", true),
                     aiAgentTaskPrompt = obj.optString(
@@ -1641,7 +1641,7 @@ object HorizonNativeBridge {
             put("ram_allocation_mb", config.ramAllocationMb)
             put("aiAgentEnabled", config.aiAgentEnabled)
             put("aiAgentProvider", config.aiAgentProvider.serdeKey)
-            put("geminiModel", config.geminiModel)
+            put("geminiModel", normalizeGeminiModelId(config.geminiModel))
             put("aiAgentAutoAssistChat", config.aiAgentAutoAssistChat)
             put("aiAgentAutonomousActions", config.aiAgentAutonomousActions)
             put("aiAgentTaskPrompt", config.aiAgentTaskPrompt)
@@ -5285,6 +5285,42 @@ object HorizonNativeBridge {
      * Fetches available `generateContent`-capable models from Google AI Studio (`v1beta/models`)
      * using the locally stored API key, merging them with `DEFAULT_GEMINI_MODELS`.
      */
+    /**
+     * Normalizes any raw model string or display name into its canonical `modelId`
+     * so model selection and display names never drift out of sync.
+     */
+    fun normalizeGeminiModelId(raw: String): String {
+        val trimmed = raw.trim().removePrefix("models/")
+        if (trimmed.isEmpty()) return "gemini-4-argon"
+        // If user or config stored a displayName or bracketed string like "Gemini 4 Argon [gemini-4-argon]"
+        if (trimmed.contains("[") && trimmed.endsWith("]")) {
+            val inside = trimmed.substringAfterLast("[").removeSuffix("]").trim()
+            if (inside.isNotEmpty()) return inside.lowercase(Locale.US)
+        }
+        val byExactId = DEFAULT_GEMINI_MODELS.firstOrNull { it.modelId.equals(trimmed, ignoreCase = true) }
+        if (byExactId != null) return byExactId.modelId
+        val byDisplayName = DEFAULT_GEMINI_MODELS.firstOrNull { it.displayName.equals(trimmed, ignoreCase = true) }
+        if (byDisplayName != null) return byDisplayName.modelId
+        val slug = trimmed.lowercase(Locale.US).replace(" ", "-")
+        val bySlug = DEFAULT_GEMINI_MODELS.firstOrNull { it.modelId.equals(slug, ignoreCase = true) }
+        if (bySlug != null) return bySlug.modelId
+        return trimmed.lowercase(Locale.US)
+    }
+
+    fun findGeminiModelOption(modelId: String, pool: List<GeminiModelOption> = DEFAULT_GEMINI_MODELS): GeminiModelOption {
+        val norm = normalizeGeminiModelId(modelId)
+        return pool.firstOrNull { normalizeGeminiModelId(it.modelId) == norm }
+            ?: DEFAULT_GEMINI_MODELS.firstOrNull { it.modelId == norm }
+            ?: GeminiModelOption(
+                modelId = norm,
+                displayName = norm.split("-").joinToString(" ") { part ->
+                    part.replaceFirstChar { c -> c.uppercaseChar() }
+                },
+                badge = "CUSTOM MODEL",
+                description = "Custom Google AI Studio model ID ($norm)"
+            )
+    }
+
     fun fetchAvailableGeminiModels(context: Context, apiKeyOverride: String = ""): List<GeminiModelOption> {
         val key = apiKeyOverride.trim().ifBlank { loadGeminiApiKeyLocal(context) }
         val merged = LinkedHashMap<String, GeminiModelOption>()
@@ -5304,8 +5340,8 @@ object HorizonNativeBridge {
                 val modelsArr = root.optJSONArray("models") ?: JSONArray()
                 for (i in 0 until modelsArr.length()) {
                     val m = modelsArr.optJSONObject(i) ?: continue
-                    val rawName = m.optString("name", "").removePrefix("models/").trim()
-                    if (!rawName.startsWith("gemini", ignoreCase = true)) continue
+                    val rawName = m.optString("name", "").removePrefix("models/").trim().lowercase(Locale.US)
+                    if (!rawName.startsWith("gemini") && !rawName.startsWith("gemma")) continue
                     val methods = m.optJSONArray("supportedGenerationMethods")
                     var supportsGen = false
                     if (methods != null) {
@@ -5317,12 +5353,13 @@ object HorizonNativeBridge {
                         }
                     }
                     if (!supportsGen) continue
-                    val disp = m.optString("displayName", rawName)
-                    val desc = m.optString("description", "Google AI Studio Gemini model ($rawName)").take(120)
+                    val disp = m.optString("displayName", "").trim().ifBlank { rawName }
+                    val cleanDisp = disp.removeSuffix("($rawName)").trim()
+                    val desc = m.optString("description", "Google AI Studio model ($rawName)").take(120)
                     if (rawName !in merged) {
                         merged[rawName] = GeminiModelOption(
                             modelId = rawName,
-                            displayName = "$disp ($rawName)",
+                            displayName = cleanDisp,
                             badge = "AI STUDIO LIVE",
                             description = desc
                         )

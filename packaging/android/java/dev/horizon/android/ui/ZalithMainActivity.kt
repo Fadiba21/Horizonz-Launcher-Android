@@ -91,6 +91,10 @@ import dev.horizon.android.R
 import dev.horizon.android.bridge.*
 import dev.horizon.android.model.*
 import dev.horizon.android.ui.theme.HorizonZalithTheme
+import dev.horizon.android.ui.theme.KyantLiquidGlassSidebarRail
+import dev.horizon.android.ui.theme.KyantLiquidGlassSpec
+import dev.horizon.android.ui.theme.liquidGlassInteractiveButton
+import dev.horizon.android.ui.theme.liquidGlassSurface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -150,7 +154,19 @@ private val MutedSubtitleText: Color get() = activeUiPalette.mutedSubtitleText
 private fun SyncDynamicLauncherPalette(palette: ZalithThemePalette, useDynamicColor: Boolean) {
     val scheme = MaterialTheme.colorScheme
     activeUiPalette = remember(palette, useDynamicColor, scheme.primary, scheme.background) {
-        if (useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (palette == ZalithThemePalette.LIQUID_GLASS) {
+            HorizonDynamicPalette(
+                rootBg = Color(0xFF0A1017),
+                cardSlateBg = Color(0x4215202D),
+                cardRowBg = Color(0x541D2C3D),
+                subRailCapsuleActive = Color(0x558BE0FF),
+                skyBlueAccent = Color(0xFF90E4FF),
+                skyBlueDarkText = Color(0xFF071A24),
+                lavenderBadgeBg = Color(0x4890E4FF),
+                lavenderBadgeText = Color(0xFFE8FAFF),
+                mutedSubtitleText = Color(0xFFB6C7D6)
+            )
+        } else if (useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             HorizonDynamicPalette(
                 rootBg = Color(0xFF121619),
                 cardSlateBg = Color(0xFF1E2429),
@@ -164,7 +180,7 @@ private fun SyncDynamicLauncherPalette(palette: ZalithThemePalette, useDynamicCo
             )
         } else {
             when (palette) {
-                ZalithThemePalette.MATERIAL_YOU -> HorizonDynamicPalette(
+                ZalithThemePalette.MATERIAL_YOU, ZalithThemePalette.LIQUID_GLASS -> HorizonDynamicPalette(
                     rootBg = Color(0xFF14181B),
                     cardSlateBg = Color(0xFF22282C),
                     cardRowBg = Color(0xFF2A3136),
@@ -374,9 +390,22 @@ class ZalithMainActivity : ComponentActivity() {
                                         withContext(Dispatchers.IO) {
                                             HorizonNativeBridge.prepareNativeGameLaunch(context, cfgSnapshot, accSnapshot)
                                         }
-                                        delay(180L)
+                                        delay(160L)
                                         isLauncherHibernated = true
                                         HorizonNativeBridge.startHorizonGameActivity(context, cfgSnapshot, accSnapshot)
+                                        // Allow :game (HorizonActivity) to take foreground window, then shut down the
+                                        // launcher process completely so 0 MB RAM and 0% CPU are used by the launcher!
+                                        delay(320L)
+                                        HorizonNativeBridge.releaseMemoryForGameLaunch(context)
+                                        runCatching {
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                                                finishAndRemoveTask()
+                                            } else {
+                                                finish()
+                                            }
+                                        }
+                                        delay(120L)
+                                        android.os.Process.killProcess(android.os.Process.myPid())
                                     }
                                 }
                             }
@@ -1639,6 +1668,7 @@ fun ZalithCleanLauncherScreen(
                 ) {
                     ZalithIconRail(
                         selectedTab = selectedTab,
+                        isLiquidGlass = config.themePalette == ZalithThemePalette.LIQUID_GLASS,
                         onSelectTab = { selectedTab = it }
                     )
 
@@ -1764,6 +1794,7 @@ fun ZalithCleanLauncherScreen(
                                 activeAccount = activeAccount,
                                 activeSkinBitmap = activeSkinBitmap,
                                 installStatus = installStatus,
+                                isLiquidGlass = config.themePalette == ZalithThemePalette.LIQUID_GLASS,
                                 onOpenAccountScreen = { selectedTab = ZalithNavTab.ACCOUNTS },
                                 onOpenVersions = { selectedTab = ZalithNavTab.VERSIONS },
                                 onLaunchOrDownload = handleLaunchOrDownload
@@ -1910,6 +1941,7 @@ private fun ZalithReferenceTopBar(
 @Composable
 private fun ZalithIconRail(
     selectedTab: ZalithNavTab,
+    isLiquidGlass: Boolean = false,
     onSelectTab: (ZalithNavTab) -> Unit
 ) {
     val railTabs = remember {
@@ -1922,54 +1954,28 @@ private fun ZalithIconRail(
             ZalithNavTab.SETTINGS
         )
     }
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = CardSlateBg,
-        modifier = Modifier
-            .fillMaxHeight()
-            .width(52.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(vertical = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
-        ) {
-            railTabs.forEach { tab ->
-                val selected = tab == selectedTab
-                val icon = when (tab) {
-                    ZalithNavTab.HOME -> Icons.Default.Home
-                    ZalithNavTab.VERSIONS -> Icons.Default.Download
-                    ZalithNavTab.STORE -> Icons.Default.Storefront
-                    ZalithNavTab.FILES -> Icons.Default.Extension
-                    ZalithNavTab.ACCOUNTS -> Icons.Default.Checkroom
-                    ZalithNavTab.LOGS -> Icons.Default.Terminal
-                    ZalithNavTab.SETTINGS -> Icons.Default.Settings
-                }
-                val pillColor by animateColorAsState(
-                    targetValue = if (selected) SubRailCapsuleActive else Color.Transparent,
-                    animationSpec = tween(200),
-                    label = "RailPillColor"
-                )
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(pillColor)
-                        .animatedPressScale { onSelectTab(tab) }
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = tab.title,
-                        tint = if (selected) SkyBlueAccent else MutedSubtitleText,
-                        modifier = Modifier.size(19.dp)
-                    )
-                }
+    KyantLiquidGlassSidebarRail(
+        tabs = railTabs,
+        selectedTab = selectedTab,
+        isLiquidGlass = isLiquidGlass,
+        trackColor = CardSlateBg,
+        activePillColor = SubRailCapsuleActive,
+        activeIconColor = SkyBlueAccent,
+        inactiveIconColor = MutedSubtitleText,
+        tabIcon = { tab ->
+            when (tab) {
+                ZalithNavTab.HOME -> Icons.Default.Home
+                ZalithNavTab.VERSIONS -> Icons.Default.Download
+                ZalithNavTab.STORE -> Icons.Default.Storefront
+                ZalithNavTab.FILES -> Icons.Default.Extension
+                ZalithNavTab.ACCOUNTS -> Icons.Default.Checkroom
+                ZalithNavTab.LOGS -> Icons.Default.Terminal
+                ZalithNavTab.SETTINGS -> Icons.Default.Settings
             }
-        }
-    }
+        },
+        tabTitle = { it.title },
+        onSelectTab = onSelectTab
+    )
 }
 
 /**
@@ -7518,25 +7524,183 @@ private fun CleanSettingsViewport(
                             }
                         }
 
-                        // Gemini Model Selector Dropdown
-                        val selectedModelObj = availableModels.firstOrNull { it.modelId == config.geminiModel }
-                            ?: GeminiModelOption(
-                                modelId = config.geminiModel,
-                                displayName = config.geminiModel,
-                                badge = "GEMINI",
-                                description = "Selected Google AI Studio model"
-                            )
+                        // Clean, Non-Buggy Modal Gemini Model Selector (1-to-1 DisplayName <-> ModelId)
+                        var showModelPickerDialog by remember { mutableStateOf(false) }
+                        var modelSearchQuery by remember { mutableStateOf("") }
+                        val normalizedActiveModelId = HorizonNativeBridge.normalizeGeminiModelId(config.geminiModel)
+                        val selectedModelObj = HorizonNativeBridge.findGeminiModelOption(normalizedActiveModelId, availableModels)
 
-                        ZalithSettingDropdownCard(
-                            title = if (isRefreshingModels) "Model Google AI Studio (Memuat daftar model...)" else "Pilih Model Google AI Studio (${availableModels.size} Model Tersedia)",
-                            description = "${selectedModelObj.description} (${selectedModelObj.badge})",
-                            selectedItem = selectedModelObj,
-                            options = availableModels,
-                            itemLabel = { "${it.displayName} [${it.modelId}]" },
-                            onSelect = { chosen ->
-                                onConfigChange(config.copy(geminiModel = chosen.modelId))
+                        if (showModelPickerDialog) {
+                            val filteredModels = remember(availableModels, modelSearchQuery) {
+                                val q = modelSearchQuery.trim().lowercase(Locale.US)
+                                if (q.isEmpty()) availableModels
+                                else availableModels.filter {
+                                    it.displayName.lowercase(Locale.US).contains(q) ||
+                                        it.modelId.lowercase(Locale.US).contains(q) ||
+                                        it.badge.lowercase(Locale.US).contains(q)
+                                }
                             }
-                        )
+                            AlertDialog(
+                                onDismissRequest = { showModelPickerDialog = false },
+                                containerColor = Color(0xFF161B20),
+                                title = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "Pilih Model Google AI Studio (${availableModels.size})",
+                                                fontSize = 15.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = Color.White
+                                            )
+                                            LavenderTagBadge(text = selectedModelObj.badge)
+                                        }
+                                        OutlinedTextField(
+                                            value = modelSearchQuery,
+                                            onValueChange = { modelSearchQuery = it },
+                                            placeholder = { Text("Cari model (misal: Argon, 4.0, 3.8, 3.5, 2.5, Lite)...", fontSize = 11.sp) },
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                    }
+                                },
+                                text = {
+                                    LazyColumn(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .height(260.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        items(filteredModels, key = { it.modelId }) { option ->
+                                            val isSelected = HorizonNativeBridge.normalizeGeminiModelId(option.modelId) == normalizedActiveModelId
+                                            Surface(
+                                                shape = RoundedCornerShape(12.dp),
+                                                color = if (isSelected) SkyBlueAccent.copy(alpha = 0.18f) else Color(0xFF20272E),
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .animatedPressScale {
+                                                        onConfigChange(config.copy(geminiModel = option.modelId))
+                                                        showModelPickerDialog = false
+                                                    }
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    Column(
+                                                        modifier = Modifier.weight(1f),
+                                                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                                                    ) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                                        ) {
+                                                            Text(
+                                                                text = option.displayName,
+                                                                fontSize = 13.5.sp,
+                                                                fontWeight = FontWeight.Bold,
+                                                                color = if (isSelected) SkyBlueAccent else Color.White
+                                                            )
+                                                            Text(
+                                                                text = option.badge,
+                                                                fontSize = 9.5.sp,
+                                                                fontWeight = FontWeight.SemiBold,
+                                                                color = Color(0xFFD0C6F2)
+                                                            )
+                                                        }
+                                                        Text(
+                                                            text = "ID: ${option.modelId}",
+                                                            fontSize = 11.sp,
+                                                            fontWeight = FontWeight.Medium,
+                                                            color = SkyBlueAccent.copy(alpha = 0.88f)
+                                                        )
+                                                        Text(
+                                                            text = option.description,
+                                                            fontSize = 11.sp,
+                                                            color = MutedSubtitleText,
+                                                            maxLines = 2,
+                                                            overflow = TextOverflow.Ellipsis
+                                                        )
+                                                    }
+                                                    if (isSelected) {
+                                                        Spacer(Modifier.width(8.dp))
+                                                        Icon(
+                                                            imageVector = Icons.Default.CheckCircle,
+                                                            contentDescription = null,
+                                                            tint = SkyBlueAccent,
+                                                            modifier = Modifier.size(18.dp)
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    TextButton(onClick = { showModelPickerDialog = false }) {
+                                        Text("Tutup", color = SkyBlueAccent, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                            )
+                        }
+
+                        Surface(
+                            shape = RoundedCornerShape(18.dp),
+                            color = CardSlateBg,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .animatedPressScale { showModelPickerDialog = true }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 18.dp, vertical = 14.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = if (isRefreshingModels) "Model Google AI Studio (Memuat...)" else "Pilih Model Google AI Studio",
+                                            fontSize = 15.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = Color.White
+                                        )
+                                        LavenderTagBadge(text = selectedModelObj.badge)
+                                    }
+                                    Text(
+                                        text = "Aktif: ${selectedModelObj.displayName}  •  ID: ${selectedModelObj.modelId}",
+                                        fontSize = 12.5.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = SkyBlueAccent
+                                    )
+                                    Text(
+                                        text = selectedModelObj.description,
+                                        fontSize = 11.5.sp,
+                                        color = MutedSubtitleText
+                                    )
+                                }
+                                Spacer(Modifier.width(10.dp))
+                                Icon(
+                                    imageVector = Icons.Default.UnfoldMore,
+                                    contentDescription = "Select Model",
+                                    tint = SkyBlueAccent,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
 
                         Surface(
                             shape = RoundedCornerShape(18.dp),
@@ -7812,13 +7976,18 @@ private fun CleanSettingsViewport(
                         }
 
                         ZalithSettingDropdownCard(
-                            title = "Theme Palette",
-                            description = "Choose the color scheme used across HorizonZ Launcher (applies immediately)",
+                            title = "Theme Palette (Default: Monet / Material You)",
+                            description = "Pilih tema tampilan Launcher: Monet (Default) atau Liquid Glass (Kyant0 AndroidLiquidGlass Backdrop dengan efek refraksi & animasi spring)",
                             selectedItem = config.themePalette,
                             options = ZalithThemePalette.entries,
                             itemLabel = { it.label },
-                            onSelect = {
-                                onConfigChange(config.copy(themePalette = it, useDynamicColor = false))
+                            onSelect = { chosenPalette ->
+                                onConfigChange(
+                                    config.copy(
+                                        themePalette = chosenPalette,
+                                        useDynamicColor = (chosenPalette == ZalithThemePalette.MATERIAL_YOU)
+                                    )
+                                )
                             }
                         )
 
@@ -8080,16 +8249,30 @@ private fun ZalithLaunchSidebar(
     activeAccount: ZalithAccount,
     activeSkinBitmap: Bitmap,
     installStatus: AssetInstallStatus,
+    isLiquidGlass: Boolean = false,
     onOpenAccountScreen: () -> Unit,
     onOpenVersions: () -> Unit,
     onLaunchOrDownload: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = CardSlateBg,
+        color = if (isLiquidGlass) Color.Transparent else CardSlateBg,
         modifier = Modifier
             .fillMaxHeight()
             .width(182.dp)
+            .liquidGlassSurface(
+                enabled = isLiquidGlass,
+                spec = KyantLiquidGlassSpec(
+                    cornerRadius = 22.dp,
+                    refractionHeightPx = 32f,
+                    refractionAmountPx = -40f,
+                    chromaticAberration = 1.45f,
+                    surfaceTint = Color(0x2E90E4FF),
+                    surfaceCover = Color(0x480D151E),
+                    rimHighlightAlpha = 0.68f,
+                    enableAgslShader = true
+                )
+            )
     ) {
         Column(
             modifier = Modifier

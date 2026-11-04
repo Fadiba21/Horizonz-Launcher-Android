@@ -43,12 +43,12 @@ val ZalithTypography = Typography(
 
 @Composable
 fun HorizonZalithTheme(
-    palette: ZalithThemePalette = ZalithThemePalette.EMBERMIRE,
-    useDynamicColor: Boolean = false,
+    palette: ZalithThemePalette = ZalithThemePalette.MATERIAL_YOU,
+    useDynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    val colorScheme = if (useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val colorScheme = if (useDynamicColor && palette != ZalithThemePalette.LIQUID_GLASS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         dynamicDarkColorScheme(context)
     } else {
         val primary = Color(palette.primaryHex)
@@ -56,20 +56,20 @@ fun HorizonZalithTheme(
         val surface = Color(palette.surfaceHex)
         darkColorScheme(
             primary = primary,
-            onPrimary = Color(0xFF12141A),
-            primaryContainer = primary.copy(alpha = 0.22f),
-            onPrimaryContainer = Color(0xFFFFEDE6),
+            onPrimary = Color(0xFF0A141D),
+            primaryContainer = primary.copy(alpha = if (palette == ZalithThemePalette.LIQUID_GLASS) 0.28f else 0.22f),
+            onPrimaryContainer = Color(0xFFE8F8FF),
             secondary = secondary,
-            onSecondary = Color(0xFF12141A),
-            secondaryContainer = secondary.copy(alpha = 0.20f),
-            onSecondaryContainer = Color(0xFFFFF3E0),
+            onSecondary = Color(0xFF0A141D),
+            secondaryContainer = secondary.copy(alpha = 0.22f),
+            onSecondaryContainer = Color(0xFFE0F7FA),
             background = surface,
-            onBackground = Color(0xFFECEFF4),
+            onBackground = Color(0xFFF2F6FA),
             surface = surface,
-            onSurface = Color(0xFFECEFF4),
-            surfaceVariant = Color(0xFF1E2433),
-            onSurfaceVariant = Color(0xFFB8C2D4),
-            outline = Color(0xFF333D52)
+            onSurface = Color(0xFFF2F6FA),
+            surfaceVariant = if (palette == ZalithThemePalette.LIQUID_GLASS) Color(0x44162230) else Color(0xFF1E2433),
+            onSurfaceVariant = Color(0xFFC4D2E0),
+            outline = if (palette == ZalithThemePalette.LIQUID_GLASS) Color(0x6690E4FF) else Color(0xFF333D52)
         )
     }
 

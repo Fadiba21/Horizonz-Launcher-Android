@@ -68,7 +68,9 @@ public final class HorizonActivity extends NativeActivity {
     private HorizonSplashOverlayView splashOverlayView;
     private Dialog aiFloatingButtonDialog;
     private Dialog aiCommandPanelDialog;
-    private volatile String lastAiReplyText = "Siap membantu di Minecraft 26.3! Ketik perintah di bawah atau gunakan tombol aksi cepat.";
+    private volatile boolean aiTaskRunning = false;
+    private volatile boolean aiTaskAbortRequested = false;
+    private volatile String lastAiReplyText = "Ready. Enter any command or task for Minecraft 26.3.";
 
     static {
         try {
@@ -222,29 +224,61 @@ public final class HorizonActivity extends NativeActivity {
         watchdog.start();
     }
 
+    private String formatModelDisplayName(String modelId) {
+        if (modelId == null || modelId.trim().isEmpty()) return "Gemini 4 Argon";
+        String clean = modelId.trim();
+        if (clean.startsWith("models/")) clean = clean.substring(7);
+        switch (clean.toLowerCase()) {
+            case "gemini-4-argon": return "Gemini 4 Argon";
+            case "gemini-4.0-ultra": return "Gemini 4.0 Ultra";
+            case "gemini-4.0-pro": return "Gemini 4.0 Pro";
+            case "gemini-4.0-flash": return "Gemini 4.0 Flash";
+            case "gemini-4.0-flash-lite": return "Gemini 4.0 Flash-Lite";
+            case "gemini-3.8-pro": return "Gemini 3.8 Pro";
+            case "gemini-3.8-flash": return "Gemini 3.8 Flash";
+            case "gemini-3.8-flash-lite": return "Gemini 3.8 Flash-Lite";
+            case "gemini-3.5-pro": return "Gemini 3.5 Pro";
+            case "gemini-3.5-flash": return "Gemini 3.5 Flash";
+            case "gemini-3.5-flash-lite": return "Gemini 3.5 Flash-Lite";
+            case "gemini-3.1-pro-preview": return "Gemini 3.1 Pro Preview";
+            case "gemini-3.1-flash-lite-preview": return "Gemini 3.1 Flash-Lite Preview";
+            case "gemini-3.0-pro": return "Gemini 3.0 Pro";
+            case "gemini-3.0-flash": return "Gemini 3.0 Flash";
+            case "gemini-2.5-pro": return "Gemini 2.5 Pro";
+            case "gemini-2.5-flash": return "Gemini 2.5 Flash";
+            case "gemini-2.5-flash-lite": return "Gemini 2.5 Flash-Lite";
+            case "gemini-2.0-flash": return "Gemini 2.0 Flash";
+            case "gemini-2.0-flash-lite": return "Gemini 2.0 Flash-Lite";
+            case "gemma-3-27b-it": return "Gemma 3 27B";
+            default: return clean;
+        }
+    }
+
     /**
-     * Bridges Horizon's local in-game AI Agent control protocol (`$HORIZON_CONTROL` / `horizon-control.json`)
-     * to Google AI Studio (`generativelanguage.googleapis.com/v1beta/models/<model>:generateContent`)
-     * using the API key stored strictly locally in `horizon-gemini-secret.json`.
+     * In-Game AI Agent System running directly inside the `:game` process (`HorizonActivity`):
+     * - Minimalist monochrome in-game HUD pill (`AI`) integrated into the top-left in-game control bar.
+     * - Minimalist monochrome popup with zero gimmick buttons (`Stop`, `Clear`, `Close`, output view, prompt input + `Run`).
+     * - Full autonomous execution across Minecraft 26.3 (`command ...`, `goto`, `find-block`, `break`, `place`,
+     *   `move`, `jump`, `sneak`, `sprint`, `look`, `attack`, `interact`, `use-item`, `select-slot`, `click-slot`).
      */
     private void startGeminiAiAgentBridgeIfEnabled(final File homeDir, final Intent intent) {
         if (homeDir == null) return;
         final String localKeyCheck = readLocalGeminiKey(homeDir);
         final boolean intentEnabled = intent != null && intent.getBooleanExtra("HORIZON_AI_AGENT_ENABLED", false);
-        // Enable in-game AI Agent whenever enabled in Settings OR whenever a local Gemini API key is configured!
         if (!intentEnabled && localKeyCheck.isEmpty()) {
             return;
         }
-        final String modelId = (intent != null && intent.getStringExtra("HORIZON_GEMINI_MODEL") != null)
+        final String rawModelId = (intent != null && intent.getStringExtra("HORIZON_GEMINI_MODEL") != null)
             ? intent.getStringExtra("HORIZON_GEMINI_MODEL")
             : "gemini-4-argon";
+        final String modelId = rawModelId.startsWith("models/") ? rawModelId.substring(7).trim() : rawModelId.trim();
         final boolean autoAssistChat = intent == null || intent.getBooleanExtra("HORIZON_AI_AGENT_AUTO_CHAT", true);
         final boolean autonomousActions = intent == null || intent.getBooleanExtra("HORIZON_AI_AGENT_AUTONOMOUS", true);
         final String taskPrompt = (intent != null && intent.getStringExtra("HORIZON_AI_AGENT_TASK") != null)
             ? intent.getStringExtra("HORIZON_AI_AGENT_TASK")
-            : "Bantu player di dalam game Minecraft 26.3.";
+            : "Bantu player melakukan apapun di dalam Minecraft 26.3.";
 
-        // Show the sleek in-game "✨ AI" button beside the top-left "..." menu button once splash finishes
+        // Attach minimalist monochrome in-game system "AI" button once splash finishes
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             if (watchdogRunning && !isFinishing()) {
                 showInGameAiFloatingButton(homeDir, modelId, taskPrompt, autonomousActions);
@@ -253,37 +287,45 @@ public final class HorizonActivity extends NativeActivity {
 
         Thread agentThread = new Thread(() -> {
             String localApiKey = readLocalGeminiKey(homeDir);
-            if (localApiKey.isEmpty()) {
-                appendCrossProcessLog(homeDir, "[GeminiAgent] Waiting for local Google AI Studio API key in Settings > AI Agent.");
-                return;
+            if (!localApiKey.isEmpty()) {
+                appendCrossProcessLog(homeDir, "[GeminiAgent] In-game AI system active (model=" + modelId + ").");
             }
-            appendCrossProcessLog(homeDir, "[GeminiAgent] Google AI Studio Bridge active (model=" + modelId + ").");
             String lastHandledChatLine = "";
             boolean greetedInWorld = false;
+            File openTriggerFlag = new File(homeDir, "horizon-ai-open.flag");
 
             while (watchdogRunning) {
                 try {
-                    String stateResp = sendControlCommandToGame(homeDir, "state");
-                    if (stateResp != null && !stateResp.isEmpty() && !stateResp.contains("\"error\"")) {
-                        if (!greetedInWorld) {
+                    // Check if native Rust HUD wrote `horizon-ai-open.flag` to open the monochrome AI panel
+                    if (openTriggerFlag.exists()) {
+                        openTriggerFlag.delete();
+                        runOnUiThread(() -> showInGameAiCommandPanel(homeDir, modelId, taskPrompt, autonomousActions));
+                    }
+
+                    if (!greetedInWorld) {
+                        String stateResp = sendControlCommandToGame(homeDir, "state");
+                        if (stateResp != null && !stateResp.isEmpty() && !stateResp.contains("\"error\"")) {
                             greetedInWorld = true;
                             sendControlCommandToGame(
                                 homeDir,
-                                "chat [HorizonZ Gemini AI] Model " + modelId + " aktif! Tekan tombol '✨ AI' di kiri atas layar atau ketik @ai <pesan> di chat."
+                                "chat [AI] " + formatModelDisplayName(modelId) + " ready. Tap 'AI' at top-left or type @ai <task>."
                             );
                         }
                     }
 
-                    if (autoAssistChat) {
-                        String triggerMsg = pollLatestChatTriggerFromSocketOrLog(homeDir, lastHandledChatLine);
-                        if (triggerMsg != null && !triggerMsg.isEmpty()) {
-                            lastHandledChatLine = triggerMsg;
-                            executeGeminiPromptInBackground(homeDir, localApiKey, modelId, taskPrompt, triggerMsg, autonomousActions, null);
+                    if (autoAssistChat && !aiTaskRunning) {
+                        String keyNow = readLocalGeminiKey(homeDir);
+                        if (!keyNow.isEmpty()) {
+                            String triggerMsg = pollLatestChatTriggerFromSocketOrLog(homeDir, lastHandledChatLine);
+                            if (triggerMsg != null && !triggerMsg.isEmpty()) {
+                                lastHandledChatLine = triggerMsg;
+                                executeGeminiPromptInBackground(homeDir, keyNow, modelId, taskPrompt, triggerMsg, autonomousActions, null, null);
+                            }
                         }
                     }
-                    Thread.sleep(1200L);
+                    Thread.sleep(1600L);
                 } catch (Exception ignored) {
-                    try { Thread.sleep(2000L); } catch (InterruptedException ie) { break; }
+                    try { Thread.sleep(2200L); } catch (InterruptedException ie) { break; }
                 }
             }
         }, "HorizonZ-GeminiAgentBridge");
@@ -297,8 +339,8 @@ public final class HorizonActivity extends NativeActivity {
     }
 
     /**
-     * Shows a sleek, non-focusable "✨ AI" button at the top-left of the in-game screen
-     * (right next to the native `...` button shown in `430425.jpg`), matching Horizon's dark HUD button style!
+     * Minimalist, monochrome in-game system button ("AI") integrated directly into the `:game` HUD bar
+     * right beside the native `...` button, matching the native monochrome HUD geometry.
      */
     private void showInGameAiFloatingButton(
         final File homeDir,
@@ -313,17 +355,17 @@ public final class HorizonActivity extends NativeActivity {
             aiFloatingButtonDialog.setCancelable(false);
 
             TextView btn = new TextView(this);
-            btn.setText("✨ AI");
-            btn.setTextColor(Color.parseColor("#8BE0FF"));
-            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            btn.setText("AI");
+            btn.setTextColor(Color.parseColor("#F4F4F5"));
+            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             btn.getPaint().setFakeBoldText(true);
             btn.setGravity(Gravity.CENTER);
-            btn.setPadding(dp(12), dp(6), dp(12), dp(6));
+            btn.setPadding(dp(10), dp(5), dp(10), dp(5));
 
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(Color.parseColor("#CC14181E"));
-            bg.setCornerRadius(dp(6));
-            bg.setStroke(dp(1), Color.parseColor("#668BE0FF"));
+            bg.setColor(Color.parseColor("#CC0C0C0E"));
+            bg.setCornerRadius(dp(4));
+            bg.setStroke(dp(1), Color.parseColor("#44FFFFFF"));
             btn.setBackground(bg);
 
             btn.setOnClickListener(v -> {
@@ -338,7 +380,7 @@ public final class HorizonActivity extends NativeActivity {
                 lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
                 lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
                 lp.gravity = Gravity.TOP | Gravity.START;
-                lp.x = dp(68);
+                lp.x = dp(64);
                 lp.y = dp(6);
                 lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -353,7 +395,12 @@ public final class HorizonActivity extends NativeActivity {
     }
 
     /**
-     * Opens the interactive In-Game Google AI Studio (Gemini API) Command & Assistant Panel over Minecraft.
+     * Minimalist, Monochrome In-Game AI Popup:
+     * - Strictly monochrome palette (#0C0C0E surface, #16161A inner box, #2E2E34 1px border, #F4F4F5 / #A1A1AA text).
+     * - No gimmick buttons or emoji chips — only functional controls:
+     *   Header: Model Name + Status | [Stop] [Clear] [✕]
+     *   Body: Clean scrollable execution & response log
+     *   Footer: Prompt/Command input field + [Run] button
      */
     private void showInGameAiCommandPanel(
         final File homeDir,
@@ -371,178 +418,184 @@ public final class HorizonActivity extends NativeActivity {
 
             LinearLayout root = new LinearLayout(this);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dp(16), dp(14), dp(16), dp(14));
+            root.setPadding(dp(14), dp(12), dp(14), dp(12));
             GradientDrawable panelBg = new GradientDrawable();
-            panelBg.setColor(Color.parseColor("#F2181E24"));
-            panelBg.setCornerRadius(dp(16));
-            panelBg.setStroke(dp(1), Color.parseColor("#888BE0FF"));
+            panelBg.setColor(Color.parseColor("#F20C0C0E"));
+            panelBg.setCornerRadius(dp(10));
+            panelBg.setStroke(dp(1), Color.parseColor("#FF2E2E34"));
             root.setBackground(panelBg);
 
-            // Header row
+            // Header row: Monochrome Title + [Stop] + [Clear] + [✕]
             LinearLayout header = new LinearLayout(this);
             header.setOrientation(LinearLayout.HORIZONTAL);
             header.setGravity(Gravity.CENTER_VERTICAL);
 
-            TextView titleTv = new TextView(this);
-            titleTv.setText("✨ HorizonZ Gemini AI Agent (" + modelId + ")");
-            titleTv.setTextColor(Color.WHITE);
-            titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f);
+            final TextView titleTv = new TextView(this);
+            titleTv.setText("AI AGENT  •  " + formatModelDisplayName(modelId) + (aiTaskRunning ? "  [RUNNING]" : ""));
+            titleTv.setTextColor(Color.parseColor("#F4F4F5"));
+            titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
             titleTv.getPaint().setFakeBoldText(true);
             LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             header.addView(titleTv, titleLp);
 
+            final TextView replyTv = new TextView(this);
+
+            // [Stop] button (stops any running autonomous action or movement immediately)
+            Button stopBtn = new Button(this);
+            stopBtn.setText("Stop");
+            stopBtn.setAllCaps(false);
+            stopBtn.setTextColor(Color.parseColor("#F4F4F5"));
+            stopBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            stopBtn.setPadding(dp(8), 0, dp(8), 0);
+            GradientDrawable stopBg = new GradientDrawable();
+            stopBg.setColor(Color.parseColor("#FF1C1C20"));
+            stopBg.setCornerRadius(dp(6));
+            stopBg.setStroke(dp(1), Color.parseColor("#FF3F3F46"));
+            stopBtn.setBackground(stopBg);
+            stopBtn.setOnClickListener(v -> {
+                aiTaskAbortRequested = true;
+                aiTaskRunning = false;
+                titleTv.setText("AI AGENT  •  " + formatModelDisplayName(modelId));
+                new Thread(() -> {
+                    sendControlCommandToGame(homeDir, "sneak false");
+                    sendControlCommandToGame(homeDir, "sprint false");
+                }).start();
+                lastAiReplyText = "Stopped active AI task.";
+                replyTv.setText(lastAiReplyText);
+            });
+            LinearLayout.LayoutParams utilBtnLp = new LinearLayout.LayoutParams(dp(52), dp(26));
+            utilBtnLp.rightMargin = dp(6);
+            header.addView(stopBtn, utilBtnLp);
+
+            // [Clear] button
+            Button clearBtn = new Button(this);
+            clearBtn.setText("Clear");
+            clearBtn.setAllCaps(false);
+            clearBtn.setTextColor(Color.parseColor("#A1A1AA"));
+            clearBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+            clearBtn.setPadding(dp(8), 0, dp(8), 0);
+            GradientDrawable clearBg = new GradientDrawable();
+            clearBg.setColor(Color.parseColor("#FF16161A"));
+            clearBg.setCornerRadius(dp(6));
+            clearBg.setStroke(dp(1), Color.parseColor("#FF27272A"));
+            clearBtn.setBackground(clearBg);
+            clearBtn.setOnClickListener(v -> {
+                lastAiReplyText = "Ready.";
+                replyTv.setText(lastAiReplyText);
+            });
+            LinearLayout.LayoutParams clearLp = new LinearLayout.LayoutParams(dp(52), dp(26));
+            clearLp.rightMargin = dp(6);
+            header.addView(clearBtn, clearLp);
+
+            // [✕] Close button
             Button closeBtn = new Button(this);
-            closeBtn.setText("Tutup");
+            closeBtn.setText("✕");
             closeBtn.setAllCaps(false);
-            closeBtn.setTextColor(Color.WHITE);
+            closeBtn.setTextColor(Color.parseColor("#F4F4F5"));
             closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            closeBtn.setPadding(0, 0, 0, 0);
             GradientDrawable closeBg = new GradientDrawable();
-            closeBg.setColor(Color.parseColor("#FF2A333B"));
-            closeBg.setCornerRadius(dp(8));
+            closeBg.setColor(Color.parseColor("#FF1C1C20"));
+            closeBg.setCornerRadius(dp(6));
+            closeBg.setStroke(dp(1), Color.parseColor("#FF2E2E34"));
             closeBtn.setBackground(closeBg);
             closeBtn.setOnClickListener(v -> {
                 aiCommandPanelDialog.dismiss();
                 enableImmersiveFullscreen();
             });
-            header.addView(closeBtn, new LinearLayout.LayoutParams(dp(70), dp(32)));
+            header.addView(closeBtn, new LinearLayout.LayoutParams(dp(28), dp(26)));
             root.addView(header);
 
-            // Response box
-            final TextView replyTv = new TextView(this);
+            // Monochrome Output / Execution Log Box
             replyTv.setText(lastAiReplyText);
-            replyTv.setTextColor(Color.parseColor("#D5DEE5"));
-            replyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            replyTv.setTextColor(Color.parseColor("#E4E4E7"));
+            replyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             replyTv.setPadding(dp(10), dp(8), dp(10), dp(8));
             GradientDrawable replyBg = new GradientDrawable();
-            replyBg.setColor(Color.parseColor("#FF101418"));
-            replyBg.setCornerRadius(dp(10));
+            replyBg.setColor(Color.parseColor("#FF121215"));
+            replyBg.setCornerRadius(dp(8));
+            replyBg.setStroke(dp(1), Color.parseColor("#FF232329"));
             replyTv.setBackground(replyBg);
 
             ScrollView replyScroll = new ScrollView(this);
             replyScroll.addView(replyTv);
             LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(84)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(96)
             );
             scrollLp.topMargin = dp(8);
             scrollLp.bottomMargin = dp(8);
             root.addView(replyScroll, scrollLp);
 
-            // Prompt input row
+            // Monochrome Prompt Input & [Run] Button Row
             LinearLayout inputRow = new LinearLayout(this);
             inputRow.setOrientation(LinearLayout.HORIZONTAL);
             inputRow.setGravity(Gravity.CENTER_VERTICAL);
 
             final EditText promptInput = new EditText(this);
-            promptInput.setHint("Tulis perintah ke Gemini AI (misal: bantu cari diamond / beri efek speed / maju 3 blok)...");
-            promptInput.setHintTextColor(Color.parseColor("#788590"));
-            promptInput.setTextColor(Color.WHITE);
-            promptInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            promptInput.setHint("Instruct AI or enter command (e.g. build shelter, mine oak_log, give diamond, gamemode creative)...");
+            promptInput.setHintTextColor(Color.parseColor("#71717A"));
+            promptInput.setTextColor(Color.parseColor("#F4F4F5"));
+            promptInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             promptInput.setInputType(InputType.TYPE_CLASS_TEXT);
-            promptInput.setPadding(dp(10), dp(8), dp(10), dp(8));
+            promptInput.setPadding(dp(10), dp(7), dp(10), dp(7));
             GradientDrawable inputBg = new GradientDrawable();
-            inputBg.setColor(Color.parseColor("#FF222A30"));
-            inputBg.setCornerRadius(dp(10));
+            inputBg.setColor(Color.parseColor("#FF16161A"));
+            inputBg.setCornerRadius(dp(8));
+            inputBg.setStroke(dp(1), Color.parseColor("#FF2E2E34"));
             promptInput.setBackground(inputBg);
             LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             inLp.rightMargin = dp(8);
             inputRow.addView(promptInput, inLp);
 
             Button sendBtn = new Button(this);
-            sendBtn.setText("Kirim AI");
+            sendBtn.setText("Run");
             sendBtn.setAllCaps(false);
-            sendBtn.setTextColor(Color.parseColor("#0E2430"));
-            sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
+            sendBtn.setTextColor(Color.parseColor("#09090B"));
+            sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             sendBtn.getPaint().setFakeBoldText(true);
             GradientDrawable sendBg = new GradientDrawable();
-            sendBg.setColor(Color.parseColor("#8BE0FF"));
-            sendBg.setCornerRadius(dp(10));
+            sendBg.setColor(Color.parseColor("#F4F4F5"));
+            sendBg.setCornerRadius(dp(8));
             sendBtn.setBackground(sendBg);
             sendBtn.setOnClickListener(v -> {
                 String q = promptInput.getText().toString().trim();
-                if (q.isEmpty()) {
-                    Toast.makeText(this, "Ketik pesan atau perintah terlebih dahulu.", Toast.LENGTH_SHORT).show();
+                if (q.isEmpty()) return;
+                promptInput.setText("");
+
+                // Support direct raw horizon-ctl or slash commands immediately even without API call
+                if (q.startsWith("/")) {
+                    final String mcCmd = q.substring(1).trim();
+                    replyTv.setText("> command " + mcCmd);
+                    new Thread(() -> {
+                        String res = sendControlCommandToGame(homeDir, "command " + mcCmd);
+                        final String out = "> /" + mcCmd + "\n" + (res != null && !res.isEmpty() ? res : "Executed.");
+                        lastAiReplyText = out;
+                        runOnUiThread(() -> replyTv.setText(out));
+                    }).start();
                     return;
                 }
+
                 String key = readLocalGeminiKey(homeDir);
                 if (key.isEmpty()) {
-                    replyTv.setText("API Key Google AI Studio belum diisi. Buka Settings > AI Agent di Launcher untuk menyimpan API Key lokal.");
+                    replyTv.setText("Google AI Studio API Key is not set. Add your API Key in Launcher Settings > AI Agent (or type /<command> for direct execution).");
                     return;
                 }
-                promptInput.setText("");
-                replyTv.setText("Memproses dengan " + modelId + "...");
-                executeGeminiPromptInBackground(homeDir, key, modelId, taskPrompt, q, autonomousActions, replyTv);
+                titleTv.setText("AI AGENT  •  " + formatModelDisplayName(modelId) + "  [RUNNING]");
+                replyTv.setText("Planning & executing with " + formatModelDisplayName(modelId) + "...");
+                executeGeminiPromptInBackground(homeDir, key, modelId, taskPrompt, q, autonomousActions, replyTv, titleTv);
             });
-            inputRow.addView(sendBtn, new LinearLayout.LayoutParams(dp(92), dp(38)));
+            inputRow.addView(sendBtn, new LinearLayout.LayoutParams(dp(68), dp(34)));
             root.addView(inputRow);
-
-            // Quick Action Chips Row
-            LinearLayout quickRow = new LinearLayout(this);
-            quickRow.setOrientation(LinearLayout.HORIZONTAL);
-            LinearLayout.LayoutParams qRowLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            );
-            qRowLp.topMargin = dp(8);
-
-            String[][] quickActions = new String[][] {
-                {"📍 Analisis Lokasi", "Analisis posisi, blok di depan, dan inventori saya sekarang serta beri saran taktis."},
-                {"❤️ Heal & Buff", "Berikan efek regeneration dan saturation ke player serta cek darah saya."},
-                {"☀️ Siang & Cerah", "Ubah waktu menjadi siang hari (time set day) dan cuaca cerah (weather clear)."},
-                {"🦘 Lompat & Maju", "Suruh karakter saya melompat dan bergerak maju sekarang."}
-            };
-
-            for (String[] qa : quickActions) {
-                final String label = qa[0];
-                final String promptText = qa[1];
-                Button qBtn = new Button(this);
-                qBtn.setText(label);
-                qBtn.setAllCaps(false);
-                qBtn.setTextColor(Color.parseColor("#D0C6F2"));
-                qBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10f);
-                GradientDrawable qBg = new GradientDrawable();
-                qBg.setColor(Color.parseColor("#FF262F37"));
-                qBg.setCornerRadius(dp(8));
-                qBtn.setBackground(qBg);
-                LinearLayout.LayoutParams bLp = new LinearLayout.LayoutParams(0, dp(32), 1f);
-                bLp.rightMargin = dp(4);
-                qBtn.setOnClickListener(v -> {
-                    // Also run immediate local game commands for instant responsiveness
-                    if (label.contains("Heal")) {
-                        new Thread(() -> {
-                            sendControlCommandToGame(homeDir, "command effect give @s minecraft:regeneration 30 1");
-                            sendControlCommandToGame(homeDir, "command effect give @s minecraft:saturation 10 1");
-                        }).start();
-                    } else if (label.contains("Siang")) {
-                        new Thread(() -> {
-                            sendControlCommandToGame(homeDir, "command time set day");
-                            sendControlCommandToGame(homeDir, "command weather clear");
-                        }).start();
-                    } else if (label.contains("Lompat")) {
-                        new Thread(() -> {
-                            sendControlCommandToGame(homeDir, "jump");
-                            sendControlCommandToGame(homeDir, "move forward 1");
-                        }).start();
-                    }
-                    String key = readLocalGeminiKey(homeDir);
-                    if (key.isEmpty()) {
-                        replyTv.setText("Aksi cepat dijalankan! (Isi API Key di Settings > AI Agent untuk penalaran penuh " + modelId + ").");
-                        return;
-                    }
-                    replyTv.setText("Menjalankan aksi & menghubungi " + modelId + "...");
-                    executeGeminiPromptInBackground(homeDir, key, modelId, taskPrompt, promptText, autonomousActions, replyTv);
-                });
-                quickRow.addView(qBtn, bLp);
-            }
-            root.addView(quickRow, qRowLp);
 
             aiCommandPanelDialog.setContentView(root);
             Window win = aiCommandPanelDialog.getWindow();
             if (win != null) {
                 win.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 WindowManager.LayoutParams lp = win.getAttributes();
-                lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.82f);
+                lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.76f);
                 lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
                 lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-                lp.y = dp(24);
+                lp.y = dp(18);
                 win.setAttributes(lp);
             }
             aiCommandPanelDialog.show();
@@ -558,35 +611,45 @@ public final class HorizonActivity extends NativeActivity {
         final String taskPrompt,
         final String userPrompt,
         final boolean autonomousActions,
-        final TextView targetReplyView
+        final TextView targetReplyView,
+        final TextView targetTitleView
     ) {
         new Thread(() -> {
-            String stateJson = sendControlCommandToGame(homeDir, "state");
-            String invJson = sendControlCommandToGame(homeDir, "inventory");
-            String lookJson = sendControlCommandToGame(homeDir, "looking-at");
+            aiTaskAbortRequested = false;
+            aiTaskRunning = true;
+            try {
+                String stateJson = sendControlCommandToGame(homeDir, "state");
+                String invJson = sendControlCommandToGame(homeDir, "inventory");
+                String lookJson = sendControlCommandToGame(homeDir, "looking-at");
 
-            String geminiReply = callGeminiAgentApi(
-                apiKey,
-                modelId,
-                taskPrompt,
-                stateJson != null ? stateJson : "{}",
-                invJson != null ? invJson : "{}",
-                lookJson != null ? lookJson : "{}",
-                userPrompt,
-                autonomousActions
-            );
+                String geminiReply = callGeminiAgentApi(
+                    apiKey,
+                    modelId,
+                    taskPrompt,
+                    stateJson != null ? stateJson : "{}",
+                    invJson != null ? invJson : "{}",
+                    lookJson != null ? lookJson : "{}",
+                    userPrompt,
+                    autonomousActions
+                );
 
-            if (geminiReply != null && !geminiReply.isEmpty()) {
-                String formatted = dispatchGeminiAgentResponse(homeDir, geminiReply, autonomousActions);
-                lastAiReplyText = formatted;
-                if (targetReplyView != null) {
-                    runOnUiThread(() -> targetReplyView.setText(formatted));
+                if (geminiReply != null && !geminiReply.isEmpty()) {
+                    String formatted = dispatchGeminiAgentResponse(homeDir, geminiReply, autonomousActions, targetReplyView);
+                    lastAiReplyText = formatted;
+                    if (targetReplyView != null) {
+                        runOnUiThread(() -> targetReplyView.setText(formatted));
+                    }
+                } else {
+                    String fallbackMsg = "No response from Gemini API (" + formatModelDisplayName(modelId) + "). Check internet connection and API Key.";
+                    lastAiReplyText = fallbackMsg;
+                    if (targetReplyView != null) {
+                        runOnUiThread(() -> targetReplyView.setText(fallbackMsg));
+                    }
                 }
-            } else {
-                String fallbackMsg = "Tidak mendapat respon dari Gemini API (" + modelId + "). Pastikan koneksi internet & API Key aktif.";
-                lastAiReplyText = fallbackMsg;
-                if (targetReplyView != null) {
-                    runOnUiThread(() -> targetReplyView.setText(fallbackMsg));
+            } finally {
+                aiTaskRunning = false;
+                if (targetTitleView != null) {
+                    runOnUiThread(() -> targetTitleView.setText("AI AGENT  •  " + formatModelDisplayName(modelId)));
                 }
             }
         }, "HorizonZ-GeminiRequestWorker").start();
@@ -621,8 +684,8 @@ public final class HorizonActivity extends NativeActivity {
      * Connects to the game's `$HORIZON_CONTROL` endpoint (`horizon-control.json`) using Horizon's
      * exact TCP JSON-file transport (`{"transport":"tcp","port":N,"token":"..."}`):
      * 1. Sends `auth <TOKEN>\n` as the first line.
-     * 2. Sends the CLI command line (`state\n`, `inventory\n`, `looking-at\n`, `chat ...\n`, `command ...\n`, `jump\n`, etc.).
-     * 3. Reads and returns the JSON response line from the game!
+     * 2. Sends the CLI command line (`state\n`, `inventory\n`, `looking-at\n`, `chat ...\n`, `command ...\n`, `goto ...\n`, etc.).
+     * 3. Reads and returns the JSON response line from the game.
      */
     private String sendControlCommandToGame(File homeDir, String commandLine) {
         try {
@@ -646,7 +709,7 @@ public final class HorizonActivity extends NativeActivity {
 
             try (Socket sock = new Socket()) {
                 sock.connect(new InetSocketAddress(host, port), 1500);
-                sock.setSoTimeout(2000);
+                sock.setSoTimeout(3500);
                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(sock.getOutputStream(), StandardCharsets.UTF_8));
                 BufferedReader reader = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
 
@@ -658,7 +721,7 @@ public final class HorizonActivity extends NativeActivity {
                 writer.flush();
 
                 String line1 = reader.readLine();
-                if (line1 != null && line1.contains("\"authenticated\"") && reader.ready()) {
+                if (line1 != null && line1.contains("\"authenticated\"")) {
                     String line2 = reader.readLine();
                     if (line2 != null) return line2;
                 }
@@ -670,7 +733,6 @@ public final class HorizonActivity extends NativeActivity {
     }
 
     private String pollLatestChatTriggerFromSocketOrLog(File homeDir, String lastHandled) {
-        // 1. Check `messages` via control socket
         String msgsJson = sendControlCommandToGame(homeDir, "messages");
         if (msgsJson != null && !msgsJson.isEmpty()) {
             try {
@@ -679,7 +741,7 @@ public final class HorizonActivity extends NativeActivity {
                 if (arr != null) {
                     for (int i = arr.length() - 1; i >= 0; i--) {
                         String itemStr = arr.optString(i, "").trim();
-                        if (itemStr.contains("[HorizonZ Gemini AI]")) continue;
+                        if (itemStr.contains("[AI]") || itemStr.contains("[HorizonZ Gemini AI]")) continue;
                         String lower = itemStr.toLowerCase();
                         if (lower.contains("@ai ") || lower.contains("!ai ")) {
                             if (!itemStr.equals(lastHandled)) return itemStr;
@@ -689,7 +751,6 @@ public final class HorizonActivity extends NativeActivity {
                 }
             } catch (Exception ignored) {}
         }
-        // 2. Also check `logs/latest.log` for `[CHAT]` lines containing `@ai ` or `!ai `
         File logFile = new File(homeDir, "logs/latest.log");
         if (!logFile.exists()) {
             logFile = new File(homeDir, ".local/horizon-client/26.3/logs/latest.log");
@@ -700,7 +761,7 @@ public final class HorizonActivity extends NativeActivity {
                 String[] lines = tail.split("\n");
                 for (int i = lines.length - 1; i >= Math.max(0, lines.length - 25); i--) {
                     String l = lines[i].trim();
-                    if (l.contains("[HorizonZ Gemini AI]")) continue;
+                    if (l.contains("[AI]") || l.contains("[HorizonZ Gemini AI]")) continue;
                     String lower = l.toLowerCase();
                     if ((lower.contains("[chat]") || lower.contains("<")) && (lower.contains("@ai ") || lower.contains("!ai "))) {
                         if (!l.equals(lastHandled)) return l;
@@ -736,18 +797,38 @@ public final class HorizonActivity extends NativeActivity {
                 conn.setRequestMethod("POST");
                 conn.setDoOutput(true);
                 conn.setConnectTimeout(8000);
-                conn.setReadTimeout(12000);
+                conn.setReadTimeout(14000);
                 conn.setRequestProperty("Content-Type", "application/json; charset=utf-8");
 
-                String sysPrompt = "You are HorizonZ Gemini AI Agent (" + cleanModel + ") inside Minecraft 26.3. "
-                    + "Role instruction: " + taskPrompt + "\n"
-                    + "Current game state JSON: " + stateJson + "\n"
-                    + "Inventory JSON: " + invJson + "\n"
-                    + "Looking-at JSON: " + lookJson + "\n"
-                    + "Player request: " + userTrigger + "\n"
-                    + "Respond ONLY with a single compact JSON object in Indonesian: "
-                    + "{\"reply\":\"<short helpful reply in Indonesian under 200 chars>\",\"commands\":[\"<optional horizon-ctl command such as: jump, move forward 1, attack, interact, use-item, command time set day, command give @s diamond 1>\"]} "
-                    + (allowActions ? "Include relevant commands in the commands array when the player asks for an action." : "Keep commands array empty [].");
+                String sysPrompt = "You are the autonomous in-game AI Agent (" + formatModelDisplayName(cleanModel) + " [" + cleanModel + "]) inside Minecraft 26.3 (HorizonZ). "
+                    + "You have FULL control to perform ANY action in Minecraft 26.3 on the player's behalf.\n"
+                    + "System role: " + taskPrompt + "\n"
+                    + "Live player/world state JSON: " + stateJson + "\n"
+                    + "Live inventory JSON: " + invJson + "\n"
+                    + "Live looking-at target JSON: " + lookJson + "\n"
+                    + "Player instruction: " + userTrigger + "\n\n"
+                    + "AVAILABLE IN-GAME COMMANDS (you can chain multiple steps in the \"commands\" array):\n"
+                    + "1. Any Minecraft 26.3 command via `command <mc_command_without_leading_slash>`, for example:\n"
+                    + "   - `command gamemode creative` / `command gamemode survival` / `command gamemode spectator`\n"
+                    + "   - `command give @s diamond_sword 1` / `command give @s oak_planks 64`\n"
+                    + "   - `command time set day` / `command weather clear`\n"
+                    + "   - `command tp @s <x> <y> <z>` / `command effect give @s regeneration 60 2` / `command enchant @s sharpness 5`\n"
+                    + "   - `command fill <x1> <y1> <z1> <x2> <y2> <z2> <block>` or `command setblock <x> <y> <z> <block>` (use the player's live coordinates from state JSON to build houses, shelters, bridges, platforms, or clear areas!)\n"
+                    + "   - `command summon <entity> <x> <y> <z>` / `command kill @e[type=zombie,distance=..25]` / `command locate structure village_plains` / `command gamerule keepInventory true`\n"
+                    + "2. Direct player body, pathfinding, mining, and inventory controls via horizon-ctl:\n"
+                    + "   - `find-and-mine <block_id>` (automatically locates the nearest block of that type, walks to it, and mines it)\n"
+                    + "   - `find-block <block_id>`\n"
+                    + "   - `goto <x> <y> <z> --near 2.0`\n"
+                    + "   - `break <x> <y> <z>` / `place <x> <y> <z> up`\n"
+                    + "   - `move forward 2` / `move back 1` / `move left 1` / `move right 1`\n"
+                    + "   - `jump` / `sneak true` / `sneak false` / `sprint true` / `sprint false`\n"
+                    + "   - `look <yaw> <pitch>` / `look-at <x> <y> <z>`\n"
+                    + "   - `attack` / `interact` / `use-item` / `drop` / `select-slot <0..8>`\n"
+                    + "   - `open-inventory` / `click-slot <slot>` / `close-screen`\n"
+                    + "   - `wait 400` (wait milliseconds between steps)\n\n"
+                    + "Respond ONLY with a single valid JSON object (no markdown fences): "
+                    + "{\"reply\":\"<concise response in the player's language>\",\"commands\":[\"<step1>\",\"<step2>\",...]} "
+                    + (allowActions ? "Populate \"commands\" with all necessary commands to completely fulfill the player's request." : "Keep \"commands\" empty [].");
 
                 JSONObject payload = new JSONObject();
                 JSONArray contents = new JSONArray();
@@ -784,7 +865,52 @@ public final class HorizonActivity extends NativeActivity {
         return null;
     }
 
-    private String dispatchGeminiAgentResponse(File homeDir, String rawText, boolean allowActions) {
+    /**
+     * Executes a single normalized control command or composite macro (`find-and-mine <block>`, `wait <ms>`, `/cmd`).
+     */
+    private String executeSingleControlStep(File homeDir, String rawCmd) {
+        if (rawCmd == null) return "";
+        String cmd = rawCmd.trim();
+        if (cmd.isEmpty()) return "";
+
+        if (cmd.startsWith("/")) {
+            cmd = "command " + cmd.substring(1).trim();
+        } else if (cmd.startsWith("command /")) {
+            cmd = "command " + cmd.substring(9).trim();
+        }
+
+        String lower = cmd.toLowerCase();
+        if (lower.startsWith("wait ")) {
+            try {
+                long ms = Long.parseLong(cmd.substring(5).trim());
+                Thread.sleep(Math.max(50L, Math.min(5000L, ms)));
+            } catch (Exception ignored) {}
+            return "waited";
+        }
+
+        if (lower.startsWith("find-and-mine ")) {
+            String blockId = cmd.substring(14).trim().replace("minecraft:", "");
+            String foundJson = sendControlCommandToGame(homeDir, "find-block " + blockId);
+            if (foundJson != null && !foundJson.contains("\"error\"")) {
+                try {
+                    JSONObject fObj = new JSONObject(foundJson);
+                    int bx = fObj.optInt("x", Integer.MIN_VALUE);
+                    int by = fObj.optInt("y", Integer.MIN_VALUE);
+                    int bz = fObj.optInt("z", Integer.MIN_VALUE);
+                    if (bx != Integer.MIN_VALUE) {
+                        sendControlCommandToGame(homeDir, "goto " + bx + " " + by + " " + bz + " --near 2.5");
+                        sendControlCommandToGame(homeDir, "look-at " + bx + " " + by + " " + bz);
+                        return sendControlCommandToGame(homeDir, "break " + bx + " " + by + " " + bz);
+                    }
+                } catch (Exception ignored) {}
+            }
+            return foundJson != null ? foundJson : "block not found";
+        }
+
+        return sendControlCommandToGame(homeDir, cmd);
+    }
+
+    private String dispatchGeminiAgentResponse(File homeDir, String rawText, boolean allowActions, final TextView liveLogView) {
         try {
             String cleaned = rawText.trim();
             if (cleaned.startsWith("```")) {
@@ -794,40 +920,58 @@ public final class HorizonActivity extends NativeActivity {
             }
             String replyText = cleaned;
             JSONArray commandsArr = null;
-            if (cleaned.startsWith("{")) {
-                JSONObject obj = new JSONObject(cleaned);
+            int firstBrace = cleaned.indexOf('{');
+            int lastBrace = cleaned.lastIndexOf('}');
+            if (firstBrace >= 0 && lastBrace > firstBrace) {
+                String jsonCandidate = cleaned.substring(firstBrace, lastBrace + 1);
+                JSONObject obj = new JSONObject(jsonCandidate);
                 replyText = obj.optString("reply", obj.optString("chat", cleaned));
                 commandsArr = obj.optJSONArray("commands");
                 if (commandsArr == null) {
                     commandsArr = obj.optJSONArray("actions");
                 }
             }
+
+            StringBuilder logBuilder = new StringBuilder();
             if (replyText != null && !replyText.isEmpty()) {
-                sendControlCommandToGame(homeDir, "chat [HorizonZ Gemini AI] " + replyText.replace("\n", " "));
+                logBuilder.append(replyText.trim());
+                sendControlCommandToGame(homeDir, "chat [AI] " + replyText.replace("\n", " "));
             }
-            if (allowActions && commandsArr != null) {
+
+            if (allowActions && commandsArr != null && commandsArr.length() > 0) {
                 for (int i = 0; i < commandsArr.length(); i++) {
+                    if (aiTaskAbortRequested) {
+                        logBuilder.append("\n[Stopped by user]");
+                        break;
+                    }
                     Object item = commandsArr.opt(i);
+                    String cmdStr = "";
                     if (item instanceof String) {
-                        String cmdStr = ((String) item).trim();
-                        if (!cmdStr.isEmpty()) {
-                            sendControlCommandToGame(homeDir, cmdStr);
-                        }
+                        cmdStr = ((String) item).trim();
                     } else if (item instanceof JSONObject) {
                         JSONObject act = (JSONObject) item;
-                        String op = act.optString("op", "").trim();
-                        if ("command".equals(op)) {
-                            sendControlCommandToGame(homeDir, "command " + act.optString("command", ""));
-                        } else if (!op.isEmpty()) {
-                            sendControlCommandToGame(homeDir, op);
+                        String op = act.optString("op", act.optString("command", "")).trim();
+                        if ("command".equals(op) && act.has("command")) {
+                            cmdStr = "command " + act.optString("command", "");
+                        } else {
+                            cmdStr = op;
                         }
+                    }
+                    if (!cmdStr.isEmpty()) {
+                        logBuilder.append("\n> ").append(cmdStr);
+                        final String progressSnapshot = logBuilder.toString();
+                        if (liveLogView != null) {
+                            runOnUiThread(() -> liveLogView.setText(progressSnapshot));
+                        }
+                        executeSingleControlStep(homeDir, cmdStr);
+                        try { Thread.sleep(120L); } catch (InterruptedException ignored) { break; }
                     }
                 }
             }
-            return replyText != null ? replyText : cleaned;
+            return logBuilder.length() > 0 ? logBuilder.toString() : cleaned;
         } catch (Exception e) {
-            String fallback = rawText.replace("\n", " ").substring(0, Math.min(180, rawText.length()));
-            sendControlCommandToGame(homeDir, "chat [HorizonZ Gemini AI] " + fallback);
+            String fallback = rawText.replace("\n", " ").substring(0, Math.min(200, rawText.length()));
+            sendControlCommandToGame(homeDir, "chat [AI] " + fallback);
             return fallback;
         }
     }
