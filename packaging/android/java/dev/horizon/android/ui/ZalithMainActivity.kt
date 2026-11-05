@@ -2792,6 +2792,9 @@ private fun CleanAccountsAndSkinsViewport(
     var showBackView2D by remember { mutableStateOf(false) }
     var newAccountName by remember { mutableStateOf("") }
     var selectedAccountType by remember { mutableStateOf(AccountType.OFFLINE) }
+    var elyByPassword by remember { mutableStateOf("") }
+    var elyByTotpToken by remember { mutableStateOf("") }
+    var elyByStatusMessage by remember { mutableStateOf<String?>(null) }
 
     var savedSkinLibrary by remember { mutableStateOf<List<SavedCustomSkinItem>>(emptyList()) }
     var renameSkinTarget by remember { mutableStateOf<SavedCustomSkinItem?>(null) }
@@ -3527,7 +3530,9 @@ private fun CleanAccountsAndSkinsViewport(
                                         shape = RoundedCornerShape(10.dp),
                                         color = SkyBlueAccent,
                                         modifier = Modifier.animatedPressScale {
-                                            if (newAccountName.isNotBlank()) {
+                                            if (selectedAccountType == AccountType.ELY_BY) {
+                                                elyByStatusMessage = "Use Authenticate Ely.by below with your password to sign in."
+                                            } else if (newAccountName.isNotBlank()) {
                                                 val added = ZalithAccount(
                                                     id = UUID.randomUUID().toString(),
                                                     username = newAccountName.trim(),
@@ -3548,6 +3553,80 @@ private fun CleanAccountsAndSkinsViewport(
                                         ) {
                                             Icon(Icons.Default.PersonAdd, contentDescription = null, tint = SkyBlueDarkText, modifier = Modifier.size(15.dp))
                                             Text("Save Profile", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = SkyBlueDarkText)
+                                        }
+                                    }
+                                }
+                            }
+
+                            if (selectedAccountType == AccountType.ELY_BY) {
+                                Surface(
+                                    shape = RoundedCornerShape(14.dp),
+                                    color = CardRowBg,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        Text(
+                                            text = "Ely.by Account Sign-In (Password & 2FA are never saved to disk)",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = SkyBlueAccent
+                                        )
+                                        OutlinedTextField(
+                                            value = elyByPassword,
+                                            onValueChange = { elyByPassword = it },
+                                            singleLine = true,
+                                            label = { Text("Ely.by Password", fontSize = 11.sp) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        OutlinedTextField(
+                                            value = elyByTotpToken,
+                                            onValueChange = { elyByTotpToken = it.filter { ch -> ch.isDigit() }.take(6) },
+                                            singleLine = true,
+                                            label = { Text("Optional 6-Digit 2FA Code", fontSize = 11.sp) },
+                                            modifier = Modifier.fillMaxWidth()
+                                        )
+                                        Row(
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Button(
+                                                onClick = {
+                                                    if (newAccountName.isNotBlank() && elyByPassword.isNotBlank()) {
+                                                        val loginCopy = newAccountName.trim()
+                                                        val passCopy = elyByPassword
+                                                        val totpCopy = elyByTotpToken.trim()
+                                                        elyByPassword = ""
+                                                        elyByTotpToken = ""
+                                                        elyByStatusMessage = "Authenticating with Ely.by..."
+                                                        scope.launch {
+                                                            val (authOk, authedAcc) = withContext(Dispatchers.IO) {
+                                                                HorizonNativeBridge.authenticateElyByAccount(
+                                                                    context = context,
+                                                                    usernameOrEmail = loginCopy,
+                                                                    passwordRaw = passCopy,
+                                                                    totpCodeRaw = totpCopy
+                                                                )
+                                                            }
+                                                            if (authOk && authedAcc != null) {
+                                                                val updated = accounts.map { it.copy(isActive = false) } + authedAcc
+                                                                onAccountsChange(updated)
+                                                                newAccountName = ""
+                                                                elyByStatusMessage = "Ely.by account ${authedAcc.username} ready."
+                                                            } else {
+                                                                elyByStatusMessage = "Ely.by sign-in failed. Verify credentials or 2FA code."
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            ) {
+                                                Text("Authenticate Ely.by", fontSize = 11.sp)
+                                            }
+                                            elyByStatusMessage?.let { msg ->
+                                                Text(text = msg, fontSize = 11.sp, color = MutedSubtitleText)
+                                            }
                                         }
                                     }
                                 }
@@ -7785,6 +7864,56 @@ private fun CleanSettingsViewport(
                             options = HorizonInputHost.entries,
                             itemLabel = { it.label },
                             onSelect = { onConfigChange(config.copy(inputHost = it)) }
+                        )
+
+                        ZalithSettingDropdownCard(
+                            title = "Touch Control Scheme (v2.3)",
+                            description = "Combine Joystick or D-Pad movement with Crosshair or Tap-to-Interact aiming",
+                            selectedItem = config.touchScheme,
+                            options = HorizonTouchScheme.entries,
+                            itemLabel = { it.label },
+                            onSelect = { onConfigChange(config.copy(touchScheme = it)) }
+                        )
+
+                        ZalithSettingSliderCard(
+                            title = "Horizontal Touch Sensitivity (X)",
+                            description = "Independent horizontal camera look sensitivity for touch input",
+                            value = config.touchSensitivityXPercent,
+                            valueRange = 20..250,
+                            step = 5,
+                            valueSuffix = "%",
+                            onValueChange = { onConfigChange(config.copy(touchSensitivityXPercent = it)) }
+                        )
+
+                        ZalithSettingSliderCard(
+                            title = "Vertical Touch Sensitivity (Y)",
+                            description = "Independent vertical camera look sensitivity for touch input",
+                            value = config.touchSensitivityYPercent,
+                            valueRange = 20..250,
+                            step = 5,
+                            valueSuffix = "%",
+                            onValueChange = { onConfigChange(config.copy(touchSensitivityYPercent = it)) }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "360-Degree Joystick Movement (v2.3)",
+                            description = "Allow continuous 360-degree analog movement vector when using Touch Joystick schemes",
+                            checked = config.touch360Joystick,
+                            onCheckedChange = { onConfigChange(config.copy(touch360Joystick = it)) }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "Swap Hands Touch Button (v2.3)",
+                            description = "Show dedicated off-hand swap action button on the touch HUD",
+                            checked = config.touchSwapHandsButton,
+                            onCheckedChange = { onConfigChange(config.copy(touchSwapHandsButton = it)) }
+                        )
+
+                        ZalithSettingToggleCard(
+                            title = "Virtual Menu Mouse in Inventories (v2.3)",
+                            description = "Enable precision virtual cursor mode inside inventory, chest, and crafting screens",
+                            checked = config.inventoryVirtualMouse,
+                            onCheckedChange = { onConfigChange(config.copy(inventoryVirtualMouse = it)) }
                         )
 
                         ZalithSettingToggleCard(

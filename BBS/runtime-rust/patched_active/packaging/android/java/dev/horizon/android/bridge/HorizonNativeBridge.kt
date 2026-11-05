@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "2.2"
+    const val INSTALLED_LAUNCHER_VERSION = "2.5"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -623,6 +623,9 @@ object HorizonNativeBridge {
             "logs",
             "skins",
             "skins/library",
+            "wardrobe",
+            "wardrobe/images",
+            "wardrobe/cloud",
             "screenshots",
             "backups",
             "custom_wallpapers",
@@ -1384,7 +1387,9 @@ object HorizonNativeBridge {
                             isActive = obj.optBoolean("isActive", false),
                             skinPath = obj.optString("skinPath", ""),
                             slimSkinModel = obj.optBoolean("slimSkinModel", false),
-                            skinSourceLabel = obj.optString("skinSourceLabel", "Default (Classic Steve)")
+                            skinSourceLabel = obj.optString("skinSourceLabel", "Default (Classic Steve)"),
+                            capePath = obj.optString("capePath", ""),
+                            hideCape = obj.optBoolean("hideCape", false)
                         )
                     )
                 }
@@ -1428,6 +1433,8 @@ object HorizonNativeBridge {
                     put("skinPath", acc.skinPath)
                     put("slimSkinModel", acc.slimSkinModel)
                     put("skinSourceLabel", acc.skinSourceLabel)
+                    put("capePath", acc.capePath)
+                    put("hideCape", acc.hideCape)
                 }
             )
         }
@@ -1491,6 +1498,14 @@ object HorizonNativeBridge {
                     performanceHintsAdpf = obj.optBoolean("performance_hints", true),
                     gpuStageProfiling = obj.optBoolean("gpu_profile", false),
                     inputHost = inputHost,
+                    touchScheme = HorizonTouchScheme.entries.firstOrNull {
+                        it.serdeKey == obj.optString("touch_scheme", HorizonTouchScheme.JOYSTICK_CROSSHAIR.serdeKey)
+                    } ?: HorizonTouchScheme.JOYSTICK_CROSSHAIR,
+                    touchSensitivityXPercent = obj.optInt("touch_sensitivity_x", 100).coerceIn(20, 250),
+                    touchSensitivityYPercent = obj.optInt("touch_sensitivity_y", 100).coerceIn(20, 250),
+                    touch360Joystick = obj.optBoolean("touch_360_joystick", false),
+                    touchSwapHandsButton = obj.optBoolean("touch_swap_hands", false),
+                    inventoryVirtualMouse = obj.optBoolean("inventory_virtual_mouse", true),
                     keypadControls = obj.optBoolean("keypad_controls", false),
                     sprintToggle = obj.optBoolean("sprint_toggle", false),
                     inventoryTouchControls = obj.optBoolean("inventory_touch", true),
@@ -1604,6 +1619,12 @@ object HorizonNativeBridge {
             put("performance_hints", config.performanceHintsAdpf)
             put("gpu_profile", config.gpuStageProfiling)
             put("input_host", config.inputHost.serdeKey)
+            put("touch_scheme", config.touchScheme.serdeKey)
+            put("touch_sensitivity_x", config.touchSensitivityXPercent)
+            put("touch_sensitivity_y", config.touchSensitivityYPercent)
+            put("touch_360_joystick", config.touch360Joystick)
+            put("touch_swap_hands", config.touchSwapHandsButton)
+            put("inventory_virtual_mouse", config.inventoryVirtualMouse)
             put("keypad_controls", config.keypadControls)
             put("sprint_toggle", config.sprintToggle)
             put("inventory_touch", config.inventoryTouchControls)
@@ -1676,6 +1697,12 @@ object HorizonNativeBridge {
             put("avoid_cutout", config.screenAvoidCutout)
             put("aspect", config.screenAspect.serdeKey)
             put("input_host", config.inputHost.serdeKey)
+            put("touch_scheme", config.touchScheme.serdeKey)
+            put("touch_sensitivity_x", config.touchSensitivityXPercent)
+            put("touch_sensitivity_y", config.touchSensitivityYPercent)
+            put("touch_360_joystick", config.touch360Joystick)
+            put("touch_swap_hands", config.touchSwapHandsButton)
+            put("inventory_virtual_mouse", config.inventoryVirtualMouse)
             put("keypad_controls", config.keypadControls)
             put("sprint_toggle", config.sprintToggle)
             put("inventory_touch", config.inventoryTouchControls)
@@ -1695,10 +1722,25 @@ object HorizonNativeBridge {
         }
 
         val accountsJson = JSONObject().apply {
-            put("accounts", JSONArray())
-            put("selected", JSONObject.NULL)
-            put("offline", JSONArray().apply { put(activeAccount.username) })
-            put("offline_selected", activeAccount.username)
+            val pubAccounts = JSONArray()
+            if (activeAccount.accountType != AccountType.OFFLINE) {
+                pubAccounts.put(
+                    JSONObject().apply {
+                        put("uuid", activeAccount.uuid)
+                        put("name", activeAccount.username)
+                        put("provider", if (activeAccount.accountType == AccountType.ELY_BY) "ely.by" else "microsoft")
+                    }
+                )
+                put("accounts", pubAccounts)
+                put("selected", activeAccount.uuid)
+                put("offline", JSONArray())
+                put("offline_selected", JSONObject.NULL)
+            } else {
+                put("accounts", pubAccounts)
+                put("selected", JSONObject.NULL)
+                put("offline", JSONArray().apply { put(activeAccount.username) })
+                put("offline_selected", activeAccount.username)
+            }
         }
         listOf(home, profileHome).forEach { dir ->
             File(dir, "accounts.json").writeText(accountsJson.toString(2))
@@ -1768,7 +1810,258 @@ object HorizonNativeBridge {
                     "controlEndpoint" to File(dir, "horizon-control.json").absolutePath
                 )
             )
+            updateKeyValTxtNonDestructively(
+                File(dir, "horizon-touch.txt"),
+                linkedMapOf(
+                    "scheme" to config.touchScheme.serdeKey,
+                    "touch_scheme" to config.touchScheme.serdeKey,
+                    "sensitivityX" to String.format(Locale.US, "%.2f", config.touchSensitivityXPercent / 100.0f),
+                    "sensitivityY" to String.format(Locale.US, "%.2f", config.touchSensitivityYPercent / 100.0f),
+                    "sensitivity_x" to String.format(Locale.US, "%.2f", config.touchSensitivityXPercent / 100.0f),
+                    "sensitivity_y" to String.format(Locale.US, "%.2f", config.touchSensitivityYPercent / 100.0f),
+                    "joystick360" to config.touch360Joystick.toString(),
+                    "joystick_360" to config.touch360Joystick.toString(),
+                    "swapHandsButton" to config.touchSwapHandsButton.toString(),
+                    "swap_hands" to config.touchSwapHandsButton.toString(),
+                    "virtualMenuMouse" to config.inventoryVirtualMouse.toString(),
+                    "virtual_menu_mouse" to config.inventoryVirtualMouse.toString()
+                )
+            )
             updateOptionsTxtNonDestructively(File(dir, "options.txt"), config)
+        }
+        syncWardrobeAndAppearanceContract(home, profileHome, activeAccount)
+    }
+
+    /**
+     * Implements the upstream `Vasysik/horizon-android` (`c2665c8...150a414`) frontend-to-engine
+     * appearance contract (`docs/android-appearance.md`):
+     * - Writes `horizon-appearance.json` (`{"schema":1,"skin":...,"cape":...,"slim":...,"hide_cape":...}`)
+     *   into both `home` and `profileHome` so the Rust engine loads skin/cape PNGs afresh on every launch.
+     * - Stores digest-named PNGs under `wardrobe/images/<sha256>.png` and records provider-qualified
+     *   selections in `wardrobe/wardrobe.json` so offline names and signed-in UUIDs never overwrite each other.
+     */
+    fun syncWardrobeAndAppearanceContract(home: File, profileHome: File, activeAccount: ZalithAccount) {
+        try {
+            val wardrobeDir = File(home, "wardrobe").apply { mkdirs() }
+            val imagesDir = File(wardrobeDir, "images").apply { mkdirs() }
+            File(wardrobeDir, "cloud").mkdirs()
+
+            fun stageDigestPng(srcPath: String): String? {
+                if (srcPath.isBlank()) return null
+                val f = File(srcPath)
+                if (!f.isFile || f.length() <= 64L || f.length() > 1024L * 1024L) return null
+                val bytes = f.readBytes()
+                if (bytes.size < 8 || bytes[0] != 0x89.toByte() || bytes[1] != 0x50.toByte()) return f.absolutePath
+                val digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(bytes)
+                    .joinToString("") { "%02x".format(it) }
+                val dest = File(imagesDir, "$digest.png")
+                if (!dest.exists() || dest.length() != bytes.size.toLong()) {
+                    dest.writeBytes(bytes)
+                }
+                return dest.absolutePath
+            }
+
+            val resolvedSkinPath = stageDigestPng(activeAccount.skinPath)
+                ?: File(home, "custom_skin_active.png").takeIf { it.isFile && it.length() > 64L }?.absolutePath
+            val resolvedCapePath = stageDigestPng(activeAccount.capePath)
+
+            val appearanceObj = JSONObject().apply {
+                put("schema", 1)
+                put("skin", resolvedSkinPath ?: JSONObject.NULL)
+                put("cape", resolvedCapePath ?: JSONObject.NULL)
+                put("slim", activeAccount.slimSkinModel)
+                put("hide_cape", activeAccount.hideCape)
+            }
+            val gameRoot26 = File(home, ".local/horizon-client/26.3").apply { mkdirs() }
+            listOf(home, profileHome, gameRoot26).distinctBy { it.absolutePath }.forEach { dir ->
+                File(dir, "horizon-appearance.json").writeText(appearanceObj.toString(2))
+            }
+
+            val wardrobeJsonFile = File(wardrobeDir, "wardrobe.json")
+            val rootObj = if (wardrobeJsonFile.isFile) {
+                runCatching { JSONObject(wardrobeJsonFile.readText()) }.getOrDefault(JSONObject())
+            } else {
+                JSONObject()
+            }
+            // Refuse unsupported schemas without replacing the stored index (`docs/android-appearance.md`)
+            val existingSchema = rootObj.optInt("schema", 1)
+            if (existingSchema == 1) {
+                rootObj.put("schema", 1)
+                val selections = rootObj.optJSONObject("selections") ?: JSONObject()
+                selections.put(
+                    activeAccount.providerQualifiedKey,
+                    JSONObject().apply {
+                        put("skin", resolvedSkinPath ?: JSONObject.NULL)
+                        put("cape", resolvedCapePath ?: JSONObject.NULL)
+                        put("slim", activeAccount.slimSkinModel)
+                        put("hide_cape", activeAccount.hideCape)
+                        put("updated_at", System.currentTimeMillis())
+                    }
+                )
+                rootObj.put("selections", selections)
+                wardrobeJsonFile.writeText(rootObj.toString(2))
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "syncWardrobeAndAppearanceContract note: ${e.message}")
+        }
+    }
+
+    /**
+     * Authenticates an Ely.by account using Ely.by's documented Minecraft authentication protocol
+     * (`https://authserver.ely.by/auth/authenticate`), including optional 6-digit 2FA token support:
+     * - Passwords and 2FA codes are NEVER saved to disk (`docs/android-appearance.md`).
+     * - Access/client tokens are stored in `0600` private storage (`horizon-auth-secrets.json`) under a
+     *   separate `ely_by` provider key so they are never mixed with Microsoft credentials.
+     */
+    fun authenticateElyByAccount(
+        context: Context,
+        usernameOrEmail: String,
+        passwordRaw: String,
+        totpCodeRaw: String = ""
+    ): Pair<Boolean, ZalithAccount?> {
+        val cleanUser = usernameOrEmail.trim()
+        if (cleanUser.isEmpty() || passwordRaw.isBlank()) {
+            return false to null
+        }
+        val home = ensureHomeDirectories(context)
+        val clientToken = UUID.randomUUID().toString().replace("-", "")
+
+        return try {
+            val combinedSecret = if (totpCodeRaw.trim().length == 6) {
+                "${passwordRaw}:${totpCodeRaw.trim()}"
+            } else {
+                passwordRaw
+            }
+            val reqBody = JSONObject().apply {
+                put("username", cleanUser)
+                put("password", combinedSecret)
+                put("clientToken", clientToken)
+                put("requestUser", true)
+            }.toString()
+
+            val conn = (URL("https://authserver.ely.by/auth/authenticate").openConnection() as HttpURLConnection).apply {
+                requestMethod = "POST"
+                doOutput = true
+                connectTimeout = 7000
+                readTimeout = 8000
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                setRequestProperty("Accept", "application/json")
+            }
+            conn.outputStream.use { it.write(reqBody.toByteArray(Charsets.UTF_8)) }
+            if (conn.responseCode in 200..299) {
+                val resp = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val accessToken = resp.optString("accessToken", "").trim()
+                val profile = resp.optJSONObject("selectedProfile")
+                if (accessToken.isEmpty() || profile == null) {
+                    return false to null
+                }
+                val resolvedName = profile.optString("name", "").trim()
+                val rawUuid = profile.optString("id", "").trim()
+                if (resolvedName.isEmpty() || rawUuid.isEmpty()) {
+                    return false to null
+                }
+
+                // Store only the token under a separate `ely_by` provider key in 0600 private storage
+                val secretFile = File(home, "horizon-auth-secrets.json")
+                val root = if (secretFile.isFile) runCatching { JSONObject(secretFile.readText()) }.getOrDefault(JSONObject()) else JSONObject()
+                val elyMap = root.optJSONObject("ely_by") ?: JSONObject()
+                elyMap.put(
+                    rawUuid,
+                    JSONObject().apply {
+                        put("provider", "ely.by")
+                        put("username", resolvedName)
+                        put("accessToken", accessToken)
+                        put("clientToken", clientToken)
+                        put("updatedAt", System.currentTimeMillis())
+                    }
+                )
+                root.put("ely_by", elyMap)
+                secretFile.writeText(root.toString(2))
+                runCatching {
+                    secretFile.setReadable(false, false)
+                    secretFile.setReadable(true, true)
+                    secretFile.setWritable(false, false)
+                    secretFile.setWritable(true, true)
+                }
+                true to ZalithAccount(
+                    id = "ely_$rawUuid",
+                    username = resolvedName,
+                    uuid = rawUuid,
+                    accountType = AccountType.ELY_BY,
+                    isActive = true,
+                    skinSourceLabel = "Ely.by Authenticated"
+                )
+            } else {
+                false to null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Ely.by auth notice: ${e.message}")
+            false to null
+        }
+    }
+
+    /**
+     * Stages a read-once `0600` session file (`sessions/session-<random>.json`) for an authenticated
+     * account at launch time (`docs/microsoft-account.md` & `docs/android-appearance.md`).
+     * Returns the absolute path to the fresh session file, or an empty string for offline play or when
+     * no valid stored token exists.
+     */
+    fun prepareReadOnceSessionFile(context: Context, activeAccount: ZalithAccount, profileSlot: Int): String {
+        val home = ensureHomeDirectories(context)
+        val profileHome = getProfileHome(home, profileSlot)
+        // Clean up any stale session-*.json older than 2 minutes
+        listOf(File(home, "sessions"), File(profileHome, "sessions")).forEach { sDir ->
+            if (sDir.isDirectory) {
+                val cutoff = System.currentTimeMillis() - 120_000L
+                sDir.listFiles()?.forEach { f ->
+                    if (f.name.startsWith("session-") && f.lastModified() < cutoff) {
+                        f.delete()
+                    }
+                }
+            }
+        }
+        if (activeAccount.accountType != AccountType.ELY_BY) {
+            return ""
+        }
+        return try {
+            val secretFile = File(home, "horizon-auth-secrets.json")
+            if (!secretFile.isFile) return ""
+            val root = JSONObject(secretFile.readText())
+            val entry = root.optJSONObject("ely_by")?.optJSONObject(activeAccount.uuid) ?: return ""
+            val accessToken = entry.optString("accessToken", "").trim()
+            if (accessToken.isEmpty()) return ""
+            val clientToken = entry.optString("clientToken", "").trim()
+
+            val sessionId = UUID.randomUUID().toString().replace("-", "").take(16)
+            val sessionPayload = JSONObject().apply {
+                put("name", activeAccount.username)
+                put("uuid", activeAccount.uuid)
+                put("access_token", accessToken)
+                if (clientToken.isNotEmpty()) put("client_token", clientToken)
+                put("provider", "ely.by")
+                put("user_type", "ely")
+            }.toString(2)
+
+            var primarySessionPath = ""
+            listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { baseDir ->
+                val sessionsDir = File(baseDir, "sessions").apply { mkdirs() }
+                val sessionFile = File(sessionsDir, "session-$sessionId.json")
+                sessionFile.writeText(sessionPayload)
+                runCatching {
+                    sessionFile.setReadable(false, false)
+                    sessionFile.setReadable(true, true)
+                    sessionFile.setWritable(false, false)
+                    sessionFile.setWritable(true, true)
+                }
+                if (primarySessionPath.isEmpty()) {
+                    primarySessionPath = sessionFile.absolutePath
+                }
+            }
+            primarySessionPath
+        } catch (e: Exception) {
+            Log.w(TAG, "prepareReadOnceSessionFile note: ${e.message}")
+            ""
         }
     }
 
@@ -5487,6 +5780,7 @@ object HorizonNativeBridge {
         val totalRamMb = getDeviceTotalRamMb(context)
         val activeShaderPack = getActiveShaderPackFileName(context, config.profile)
         val hasGeminiKey = loadGeminiApiKeyLocal(context).isNotBlank()
+        val sessionFilePath = prepareReadOnceSessionFile(context, activeAccount, config.profile)
         val intent = Intent(context, HorizonActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
             putExtra("HORIZON_ANDROID_PUBLIC", config.publicOnDeviceAssetDownload)
@@ -5501,6 +5795,15 @@ object HorizonNativeBridge {
             putExtra("HORIZON_AI_AGENT_ENABLED", config.aiAgentEnabled)
             putExtra("HORIZON_AI_AGENT_PROVIDER", config.aiAgentProvider.serdeKey)
             putExtra("HORIZON_GEMINI_MODEL", config.geminiModel)
+                putExtra("HORIZON_TOUCH_SCHEME", config.touchScheme.serdeKey)
+                putExtra("HORIZON_TOUCH_SENSITIVITY_X", config.touchSensitivityXPercent)
+                putExtra("HORIZON_TOUCH_SENSITIVITY_Y", config.touchSensitivityYPercent)
+                putExtra("HORIZON_TOUCH_360_JOYSTICK", config.touch360Joystick)
+                putExtra("HORIZON_TOUCH_SWAP_HANDS", config.touchSwapHandsButton)
+                putExtra("HORIZON_INVENTORY_VIRTUAL_MOUSE", config.inventoryVirtualMouse)
+                putExtra("HORIZON_ACCOUNT_TYPE", activeAccount.accountType.name)
+                putExtra("HORIZON_HIDE_CAPE", activeAccount.hideCape)
+                putExtra("HORIZON_SESSION_FILE", sessionFilePath)
             putExtra("HORIZON_GEMINI_HAS_KEY", hasGeminiKey)
             putExtra("HORIZON_AI_AGENT_AUTO_CHAT", config.aiAgentAutoAssistChat)
             putExtra("HORIZON_AI_AGENT_AUTONOMOUS", config.aiAgentAutonomousActions)

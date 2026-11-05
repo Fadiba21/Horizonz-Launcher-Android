@@ -42,6 +42,7 @@ public final class HorizonDocumentsProvider extends DocumentsProvider {
         "horizon-mods.txt",
         "horizon-shaders.txt",
         "horizon-keypad.json",
+        "horizon-appearance.json",
         "horizon-memory.txt",
         "zalith_config.json"
     );
@@ -121,7 +122,7 @@ public final class HorizonDocumentsProvider extends DocumentsProvider {
             if (HIDDEN_SENSITIVE_NAMES.contains(p) || HIDDEN_SENSITIVE_NAMES.contains(lower)) {
                 return true;
             }
-            if (lower.contains("secret") || lower.contains("account") || lower.contains("keystore") || lower.contains("token")) {
+            if (lower.contains("secret") || lower.contains("account") || lower.contains("keystore") || lower.contains("token") || lower.contains("elyby") || lower.equals("wardrobe.json") || lower.equals("sessions") || lower.startsWith("session-")) {
                 return true;
             }
         }

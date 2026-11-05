@@ -61,14 +61,14 @@ def ensure_upstream_include_assets():
         for rs_rel, rel_to_root, resolved_path in missing_rel_paths:
             resolved_path.parent.mkdir(parents=True, exist_ok=True)
             urls = [
-                f"https://raw.githubusercontent.com/Vasysik/horizon-android/125c67284343d649b92ac5b3f9eb5a50f56328ca/{rel_to_root}",
+                f"https://raw.githubusercontent.com/Vasysik/horizon-android/150a414b09a18c900489d9462a7fc035dae744b7/{rel_to_root}",
                 f"https://raw.githubusercontent.com/Vasysik/horizon-android/android/{rel_to_root}",
                 f"https://raw.githubusercontent.com/horizon-rust/horizon/main/{rel_to_root}",
             ]
             fetched = False
             for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/1.1"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.5"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read()
                     if data:
@@ -88,7 +88,7 @@ def ensure_upstream_include_assets():
                     check=False,
                 )
                 subprocess.run(
-                    ["git", "-C", str(clone_tmp), "checkout", "125c67284343d649b92ac5b3f9eb5a50f56328ca"],
+                    ["git", "-C", str(clone_tmp), "checkout", "150a414b09a18c900489d9462a7fc035dae744b7"],
                     check=False,
                 )
                 candidate = clone_tmp / rel_to_root
@@ -680,7 +680,7 @@ def patch_ingame_ai_agent_and_native_mods():
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.1"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.5"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":

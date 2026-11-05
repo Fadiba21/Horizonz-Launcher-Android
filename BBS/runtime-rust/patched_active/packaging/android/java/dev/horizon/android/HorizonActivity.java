@@ -1090,7 +1090,7 @@ public final class HorizonActivity extends NativeActivity {
             File homeDir = getFilesDir();
             if (homeDir == null) return;
             if (!homeDir.exists()) homeDir.mkdirs();
-            final String expectedStamp = "2.1-0.7.7-125c672";
+            final String expectedStamp = "2.5-0.7.7-150a414";
             File stampFile = new File(homeDir, "engine-data-version.txt");
             String currentStamp = stampFile.exists() ? readSmallTextFile(stampFile) : "";
             File engineZip = new File(homeDir, "engine-data.zip");
@@ -1131,6 +1131,14 @@ public final class HorizonActivity extends NativeActivity {
             if (homeDir != null) {
                 Os.setenv("HORIZON_HOME", homeDir.getAbsolutePath(), true);
                 Os.setenv("HORIZON_DIRECT_GAME", "1", true);
+                File appearanceFile = new File(homeDir, "horizon-appearance.json");
+                if (appearanceFile.exists()) {
+                    Os.setenv("HORIZON_APPEARANCE_CONFIG", appearanceFile.getAbsolutePath(), true);
+                }
+                File wardrobeFile = new File(new File(homeDir, "wardrobe"), "wardrobe.json");
+                if (wardrobeFile.exists()) {
+                    Os.setenv("HORIZON_WARDROBE_CONFIG", wardrobeFile.getAbsolutePath(), true);
+                }
             }
             if (intent != null) {
                 boolean publicMode = intent.getBooleanExtra("HORIZON_ANDROID_PUBLIC", true);
@@ -1185,6 +1193,28 @@ public final class HorizonActivity extends NativeActivity {
                     Os.setenv("HORIZON_GEMINI_MODEL", (geminiModel != null && !geminiModel.isEmpty()) ? geminiModel : "gemini-4-argon", true);
                 } else {
                     Os.setenv("HORIZON_AI_AGENT_ENABLED", "0", true);
+                }
+
+                String touchScheme = intent.getStringExtra("HORIZON_TOUCH_SCHEME");
+                if (touchScheme != null && !touchScheme.isEmpty()) {
+                    Os.setenv("HORIZON_TOUCH_SCHEME", touchScheme, true);
+                }
+                int sensX = intent.getIntExtra("HORIZON_TOUCH_SENSITIVITY_X", 100);
+                int sensY = intent.getIntExtra("HORIZON_TOUCH_SENSITIVITY_Y", 100);
+                boolean joy360 = intent.getBooleanExtra("HORIZON_TOUCH_360_JOYSTICK", false);
+                boolean swapHands = intent.getBooleanExtra("HORIZON_TOUCH_SWAP_HANDS", true);
+                boolean virtMouse = intent.getBooleanExtra("HORIZON_INVENTORY_VIRTUAL_MOUSE", false);
+                Os.setenv("HORIZON_TOUCH_SENSITIVITY_X", String.valueOf(sensX), true);
+                Os.setenv("HORIZON_TOUCH_SENSITIVITY_Y", String.valueOf(sensY), true);
+                Os.setenv("HORIZON_TOUCH_360_JOYSTICK", joy360 ? "1" : "0", true);
+                Os.setenv("HORIZON_TOUCH_SWAP_HANDS", swapHands ? "1" : "0", true);
+                Os.setenv("HORIZON_INVENTORY_VIRTUAL_MOUSE", virtMouse ? "1" : "0", true);
+
+                String sessionFile = intent.getStringExtra("HORIZON_SESSION_FILE");
+                if (sessionFile != null && !sessionFile.trim().isEmpty() && new File(sessionFile.trim()).isFile()) {
+                    Os.setenv("HORIZON_SESSION_FILE", sessionFile.trim(), true);
+                } else {
+                    try { Os.unsetenv("HORIZON_SESSION_FILE"); } catch (Exception ignored) {}
                 }
 
                 try {

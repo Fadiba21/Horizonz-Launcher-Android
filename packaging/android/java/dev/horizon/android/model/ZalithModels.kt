@@ -158,7 +158,19 @@ data class GithubReleaseUpdateInfo(
 
 enum class AccountType(val badge: String) {
     OFFLINE("Offline"),
-    MICROSOFT("Microsoft")
+    MICROSOFT("Microsoft"),
+    ELY_BY("Ely.by")
+}
+
+/**
+ * Matches the four touch schemes in `Vasysik/horizon-android` (`docs/android.md`):
+ * Joystick/D-pad movement combined with Crosshair or Tap-to-interact aiming.
+ */
+enum class HorizonTouchScheme(val serdeKey: String, val label: String) {
+    JOYSTICK_CROSSHAIR("joystick-crosshair", "Joystick + Crosshair Aiming"),
+    JOYSTICK_TAP("joystick-tap", "Joystick + Tap to Interact"),
+    DPAD_CROSSHAIR("dpad-crosshair", "D-Pad + Crosshair Aiming"),
+    DPAD_TAP("dpad-tap", "D-Pad + Tap to Interact")
 }
 
 enum class HorizonRendererMode(val serdeKey: String, val label: String) {
@@ -257,8 +269,16 @@ data class ZalithAccount(
     val isActive: Boolean = false,
     val skinPath: String = "",
     val slimSkinModel: Boolean = false,
-    val skinSourceLabel: String = "Default (Classic Steve)"
-)
+    val skinSourceLabel: String = "Default (Classic Steve)",
+    val capePath: String = "",
+    val hideCape: Boolean = false
+) {
+    val providerQualifiedKey: String
+        get() = "${accountType.name.lowercase(java.util.Locale.US)}:${
+            if (accountType == AccountType.OFFLINE) username.lowercase(java.util.Locale.US)
+            else uuid.lowercase(java.util.Locale.US)
+        }"
+}
 
 data class SkinDetectionResult(
     val success: Boolean,
@@ -435,6 +455,12 @@ data class HorizonConfigState(
     val performanceHintsAdpf: Boolean = true,
     val gpuStageProfiling: Boolean = false,
     val inputHost: HorizonInputHost = HorizonInputHost.AUTO,
+    val touchScheme: HorizonTouchScheme = HorizonTouchScheme.JOYSTICK_CROSSHAIR,
+    val touchSensitivityXPercent: Int = 100,
+    val touchSensitivityYPercent: Int = 100,
+    val touch360Joystick: Boolean = false,
+    val touchSwapHandsButton: Boolean = false,
+    val inventoryVirtualMouse: Boolean = true,
     val keypadControls: Boolean = false,
     val sprintToggle: Boolean = false,
     val inventoryTouchControls: Boolean = true,

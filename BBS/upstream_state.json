@@ -1,19 +1,25 @@
 {
   "upstream_repo": "https://github.com/Vasysik/horizon-android",
   "upstream_branch": "android",
+  "request_id": "HZ-UPSTREAM-c2665c8-150a414",
+  "qa_request_id": "QA-HZ-UPSTREAM-c2665c8-150a414-v25-1",
+  "horizonz_version": "2.5",
+  "launcher_version": "2.5.0-HorizonZ",
+  "upstream_base_commit": "c2665c830fbfe4dc5cf5dea2d541b0895684f604",
+  "upstream_target_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
+  "upstream_pinned_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
+  "upstream_compare_range": "c2665c830fbfe4dc5cf5dea2d541b0895684f604...150a414b09a18c900489d9462a7fc035dae744b7",
+  "upstream_release_tag": null,
   "updated_files_in_last_sync": [
     "crates/horizon-android/Cargo.toml",
     "crates/horizon-android/src/lib.rs",
     "packaging/android/bedrock-controls.json"
   ],
+  "cached_upstream_clean_snapshot_commit": "125c67284343d649b92ac5b3f9eb5a50f56328ca",
+  "cached_upstream_clean_snapshot_note": "Historical cached snapshot hashes for the 3 files in BBS/runtime-rust/upstream_clean/ (captured at 125c67284343d649b92ac5b3f9eb5a50f56328ca, not refreshed offline); refreshed automatically at CI build time when BBS/sync_and_merge_bbs.py runs against the pinned 150a414b09a18c900489d9462a7fc035dae744b7 checkout.",
   "upstream_hashes": {
     "crates/horizon-android/Cargo.toml": "a5a0aaa3eea4e2f9faba10c7e33db1549b4a0ab07896fc2f60def1536954dbc6",
     "crates/horizon-android/src/lib.rs": "f8b36bf80c810911ddeb70075e9f8e7969469599cc15a35bde046d13d4901733",
     "packaging/android/bedrock-controls.json": "c7302b2d98bf2e989c367ba8da6807c6981099e0c73b83ad42ad54fb9d2926a3"
-  },
-  "upstream_release_tag": "v0.7.7-candidate-125c672",
-  "horizonz_version": "2.2",
-  "upstream_base_commit": "bef1eff277871f7be5bc0eed944eb76565188809",
-  "upstream_target_commit": "125c67284343d649b92ac5b3f9eb5a50f56328ca",
-  "upstream_compare_range": "bef1eff277871f7be5bc0eed944eb76565188809...125c67284343d649b92ac5b3f9eb5a50f56328ca"
+  }
 }
