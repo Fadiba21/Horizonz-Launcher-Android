@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 2.7 APK (${{ matrix.abi }})
+    name: Build HorizonZ 2.9 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 2.7 Patches
+      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 2.9 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           UPSTREAM_TARGET_COMMIT="150a414b09a18c900489d9462a7fc035dae744b7"
@@ -161,7 +161,7 @@ jobs:
       - name: Cache Rust Engine Build
         uses: Swatinem/rust-cache@v2
         with:
-          key: horizon-real-engine-v27-150a414-${{ matrix.rust_target }}
+          key: horizon-real-engine-v29-150a414-${{ matrix.rust_target }}
 
       - name: Compile Real Horizon Rust Engine (libhorizon_android.so) & Prestage Controls (${{ matrix.abi }})
         run: |
@@ -186,7 +186,7 @@ jobs:
           TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export HORIZON_ANDROID_PUBLIC=1
-          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz27')"
+          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz29')"
           export HORIZON_ANDROID_BUILD_DIRTY="false"
           export CARGO_PROFILE_RELEASE_LTO=false
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -236,18 +236,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.7-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.9-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-2.7-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-2.7-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-2.9-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-2.9-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 2.7 Release APKs
+    name: Publish HorizonZ 2.9 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -267,13 +267,12 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v2.7.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v2.7 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v2.9.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v2.9 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            ## HorizonZ - Launcher v2.7 (Android Fork of `Vasysik/horizon-android` `150a414` & `horizon-rust/horizon` 26.3)
-            - Fixed the unresolved `scope` reference in `CleanAccountsAndSkinsViewport` by declaring `val scope = rememberCoroutineScope()` for the Ely.by authentication flow.
-            - **Retained v2.6 Optimizations & Features**: Retains complete removal of `LiquidGlassBackdrop.kt` / `LIQUID_GLASS` shader overhead, 180ms debounced config persistence, cached SHA-256 skin digests, full two-way synchronization between Launcher settings and `.local/horizon-client/26.3`, and the animated in-game `✦ AI` HUD pill and popup with 1-tap Quick Action chips.
-            - **Retained v2.5 / v2.3 Upstream Integration (`150a414`)**: Retains `"user_type": "ely"` in `prepareReadOnceSessionFile`, `config.touchScheme.serdeKey`, `schema: 1` `horizon-appearance.json` and `wardrobe/wardrobe.json` staging, and pinned upstream commit `150a414b09a18c900489d9462a7fc035dae744b7`.
+            ## HorizonZ - Launcher v2.9 (Android Fork of `Vasysik/horizon-android` `150a414` & `horizon-rust/horizon` 26.3)
+            - **Kotlin runtime-directory repair (`HZ-REPAIR-v2.8-metadata-v2.9`):** Add a class-level `getAllRuntimeDirs(home, profileHome)` helper and explicitly type the returned directories as `List<File>` and each `forEach` receiver as `File` in the runtime-sync, keypad-reset, content-toggle, and Store-recording code. This targets the previous 47 Kotlin compiler diagnostics per ABI, including the unresolved `allRuntimeDirs` references and resulting `exists`, `add`, type-inference, and overload errors; the same changes are mirrored in `BBS/`.
+            - **Version and retained fixes:** Align launcher, runtime-stamp, and CI/BBS metadata with `2.9.0-HorizonZ` (`versionCode 70`) while retaining the v2.7 `CleanAccountsAndSkinsViewport` coroutine-scope fix.
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt

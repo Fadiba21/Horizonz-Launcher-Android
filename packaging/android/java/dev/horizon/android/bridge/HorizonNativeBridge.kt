@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "2.7"
+    const val INSTALLED_LAUNCHER_VERSION = "2.9"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -1731,14 +1731,18 @@ object HorizonNativeBridge {
         }
     }
 
+    private fun getAllRuntimeDirs(home: File, profileHome: File): List<File> {
+        val engine26Home = File(home, ".local/horizon-client/26.3").apply { mkdirs() }
+        return listOf(home, profileHome, engine26Home).distinctBy { it.absolutePath }
+    }
+
     private fun syncNativeHorizonAccountAndCatalog(
         home: File,
         activeAccount: ZalithAccount,
         config: HorizonConfigState
     ) {
         val profileHome = getProfileHome(home, config.profile)
-        val engine26Home = File(home, ".local/horizon-client/26.3").apply { mkdirs() }
-        val allRuntimeDirs = listOf(home, profileHome, engine26Home).distinctBy { it.absolutePath }
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
 
         // Matches `crates/horizon-client/src/android/catalog.rs` `struct Config` in v0.7.5 (including flattened `ScreenPreferences` & `device_preferences::Settings`)!
         val androidLauncherJson = JSONObject().apply {
@@ -1773,7 +1777,7 @@ object HorizonNativeBridge {
             put("ram_allocation_mb", config.ramAllocationMb)
             put("ram_unlimited", config.ramAllocationMb <= 0)
         }
-        allRuntimeDirs.forEach { dir ->
+        allRuntimeDirs.forEach { dir: File ->
             File(dir, "android-launcher.json").writeText(androidLauncherJson.toString(2))
         }
 
@@ -1798,12 +1802,12 @@ object HorizonNativeBridge {
                 put("offline_selected", activeAccount.username)
             }
         }
-        allRuntimeDirs.forEach { dir ->
+        allRuntimeDirs.forEach { dir: File ->
             File(dir, "accounts.json").writeText(accountsJson.toString(2))
             File(dir, "horizon-player.txt").writeText(activeAccount.username)
         }
 
-        allRuntimeDirs.forEach { dir ->
+        allRuntimeDirs.forEach { dir: File ->
             val keypadFile = File(dir, "horizon-keypad.json")
             val kpObj = if (keypadFile.exists()) {
                 runCatching { JSONObject(keypadFile.readText()) }.getOrElse { JSONObject() }
@@ -1817,7 +1821,7 @@ object HorizonNativeBridge {
         }
 
         // Sync `horizon-extras.txt` (Fullbright, Dynamic Lights, Auto-Reconnect, Mouse Tweaks, Inventory Sort, Discord Rich Presence)
-        allRuntimeDirs.forEach { dir ->
+        allRuntimeDirs.forEach { dir: File ->
             updateKeyValTxtNonDestructively(
                 File(dir, "horizon-extras.txt"),
                 linkedMapOf(
@@ -1834,7 +1838,7 @@ object HorizonNativeBridge {
         }
 
         // Sync `horizon-controller.txt` (Gamepad Vibration, Menu Navigation Focus/Pointer, Sensitivity, Deadzone)
-        allRuntimeDirs.forEach { dir ->
+        allRuntimeDirs.forEach { dir: File ->
             updateKeyValTxtNonDestructively(
                 File(dir, "horizon-controller.txt"),
                 linkedMapOf(
@@ -1847,7 +1851,7 @@ object HorizonNativeBridge {
             )
         }
 
-        allRuntimeDirs.forEach { dir ->
+        allRuntimeDirs.forEach { dir: File ->
             updateKeyValTxtNonDestructively(
                 File(dir, "horizon-memory.txt"),
                 linkedMapOf(
@@ -2210,7 +2214,8 @@ object HorizonNativeBridge {
     fun resetTouchKeypadLayout(context: Context, config: HorizonConfigState) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, config.profile)
-        allRuntimeDirs.forEach { dir ->
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        allRuntimeDirs.forEach { dir: File ->
             val kpFile = File(dir, "horizon-keypad.json")
             val obj = JSONObject().apply {
                 put("enabled", config.keypadControls)
@@ -2309,7 +2314,8 @@ object HorizonNativeBridge {
     ) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
-        allRuntimeDirs.forEach { dir ->
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        allRuntimeDirs.forEach { dir: File ->
             when (folder) {
                 "mods" -> {
                     val modId = sanitizeModId(fileName)
@@ -3901,7 +3907,8 @@ object HorizonNativeBridge {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
         val cleanId = sanitizeModId(projectId)
-        allRuntimeDirs.forEach { dir ->
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        allRuntimeDirs.forEach { dir: File ->
             val regFile = File(dir, "zalith-store-installed.json")
             val obj = if (regFile.exists()) runCatching { JSONObject(regFile.readText()) }.getOrElse { JSONObject() } else JSONObject()
             obj.put(projectId, version)

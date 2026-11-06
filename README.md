@@ -9,7 +9,7 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.7-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.9-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-android_150a414-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
@@ -18,7 +18,7 @@
 </div>
 
 <!-- LATEST_VERSION_START -->
-> 🚀 **Latest Update — HorizonZ v2.7 (`HZ-REPAIR-v2.5-8fa0e81-scope-v2.7`)**: Fixes `Unresolved reference: scope` in `CleanAccountsAndSkinsViewport` (`packaging/android/java/dev/horizon/android/ui/ZalithMainActivity.kt`) by declaring `val scope = rememberCoroutineScope()` at the root of the composable for the asynchronous Ely.by authentication flow, while retaining all `v2.6` optimizations (removal of `LiquidGlassBackdrop`, debounced config persistence, cached SHA-256 skin digests, two-way `.local/horizon-client/26.3` synchronization, and the animated in-game `✦ AI` popup) and pinned `Vasysik/horizon-android` commit `150a414b09a18c900489d9462a7fc035dae744b7`.
+> 🚀 **Latest Source Update — HorizonZ v2.9 (`HZ-REPAIR-v2.8-metadata-v2.9`)**: Adds a typed `getAllRuntimeDirs` helper and repairs four runtime-directory call sites associated with the previous Kotlin compiler failures; aligns `2.9.0-HorizonZ` (`versionCode 70`) metadata and retains the v2.7 Ely.by coroutine-scope fix. CI targets both Android ABIs, and release publication is gated on both builds passing.
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
@@ -64,10 +64,19 @@
 
 ## 📥 Source & Release Summary
 
-### 📦 HorizonZ v2.7 Summary (`versionCode 68` • `2.7.0-HorizonZ`)
-- **Configured CI Target ABIs**: `HorizonZ-Launcher-2.7-arm64-v8a.apk` (64-bit ARMv8) and `HorizonZ-Launcher-2.7-armeabi-v7a.apk` (32-bit ARMv7) when built via `.github/workflows/build-apk.yml`.
-- **What's New in v2.7 (`HZ-REPAIR-v2.5-8fa0e81-scope-v2.7`)**:
-  - Fixed the unresolved `scope` reference in `CleanAccountsAndSkinsViewport` by declaring `val scope = rememberCoroutineScope()` for the Ely.by authentication flow.
+### 📦 HorizonZ v2.9 Summary (`versionCode 70` • `2.9.0-HorizonZ`)
+
+- **Configured CI target ABIs**: `arm64-v8a` (64-bit ARMv8) and `armeabi-v7a` (32-bit ARMv7). The workflow publishes a release only when both ABI builds pass.
+
+#### What's New in the v2.9 APK (`HZ-REPAIR-v2.8-metadata-v2.9`)
+
+- **Kotlin runtime-directory repair (`HZ-REPAIR-v2.8-metadata-v2.9`):** Add a class-level `getAllRuntimeDirs(home, profileHome)` helper and explicitly type the returned directories as `List<File>` and each `forEach` receiver as `File` in the runtime-sync, keypad-reset, content-toggle, and Store-recording code. This targets the previous 47 Kotlin compiler diagnostics per ABI, including the unresolved `allRuntimeDirs` references and resulting `exists`, `add`, type-inference, and overload errors; the same changes are mirrored in `BBS/`.
+- **Version and retained fixes:** Align launcher, runtime-stamp, and CI/BBS metadata with `2.9.0-HorizonZ` (`versionCode 70`) while retaining the v2.7 `CleanAccountsAndSkinsViewport` coroutine-scope fix.
+
+### Previous Releases
+
+- **What's New in v2.7 (`HZ-REPAIR-v2.5-8fa0e81-scope-v2.7`, `versionCode 68` • `2.7.0-HorizonZ`, commit `8bbb5618b6cf844707f067bb960f7323eda63fd2`)**:
+  - **Lexical Coroutine Scope Fix in `CleanAccountsAndSkinsViewport` (`ZalithMainActivity.kt`)**: Added `val scope = rememberCoroutineScope()` in `CleanAccountsAndSkinsViewport` so `scope.launch` in the Ely.by authentication button resolves to the composable's lifecycle-bound `CoroutineScope`, and aligned `v2.7` (`2.7.0-HorizonZ`, `versionCode 68`) metadata.
 - **What's New in v2.6**:
   - **Removed Liquid Glass Theme & Optimized Launcher UI**: Removed `LiquidGlassBackdrop.kt` and `LIQUID_GLASS` shader overhead, replaced the sidebar rail with a fast hardware-accelerated Compose rail, debounced slider config writes (180ms) with immediate flush on activity stop/launch, and cached SHA-256 skin digests.
   - **Two-Way Launcher ↔ In-Game Settings & Content Synchronization**: Mirrors `options.txt` (including `fov` and `gamma` for Fullbright), `horizon-extras.txt`, `horizon-mods.txt`, `hmod_list.json`, `horizon-shaders.txt`, `horizon-keypad.json`, `horizon-touch.txt`, `horizon-controller.txt`, `horizon-memory.txt`, and `horizon-appearance.json` across `home`, `profileHome`, and `.local/horizon-client/26.3`, and reads back in-game changes on launcher resume.

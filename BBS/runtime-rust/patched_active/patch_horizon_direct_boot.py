@@ -68,7 +68,7 @@ def ensure_upstream_include_assets():
             fetched = False
             for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.7"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.9"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read()
                     if data:
@@ -704,7 +704,7 @@ def patch_ingame_ai_agent_and_native_mods():
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.7"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.9"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":
