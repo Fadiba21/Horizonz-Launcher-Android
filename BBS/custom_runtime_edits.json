@@ -1,7 +1,7 @@
 {
   "upstream_repo": "https://github.com/Vasysik/horizon-android.git",
   "upstream_branch": "android",
-  "version": "2.9.0-HorizonZ",
+  "version": "3.1.0-HorizonZ",
   "tracked_runtime_files": [
     "crates/horizon-android/Cargo.toml",
     "crates/horizon-android/src/lib.rs",
@@ -40,11 +40,11 @@
   "upstream_base_commit": "c2665c830fbfe4dc5cf5dea2d541b0895684f604",
   "upstream_target_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
   "upstream_pinned_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
-  "horizonz_version": "3.0",
+  "horizonz_version": "3.1",
   "request_id": "HZ-UPSTREAM-c2665c8-150a414",
-  "qa_request_id": "HZ-INGAME-BLACKSCREEN-SYNC-v3.0",
+  "qa_request_id": "HZ-REPAIR-v3.0-FileBoolean-v3.1",
   "upstream_compare_range": "c2665c830fbfe4dc5cf5dea2d541b0895684f604...150a414b09a18c900489d9462a7fc035dae744b7",
-  "repair_request_id": "HZ-REPAIR-v2.8-metadata-v2.9",
-  "version_name": "3.0.0-HorizonZ",
-  "version_code": 71
+  "repair_request_id": "HZ-REPAIR-v3.0-FileBoolean-v3.1",
+  "version_name": "3.1.0-HorizonZ",
+  "version_code": 72
 }

@@ -9,7 +9,7 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v3.0-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v3.1-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-android_150a414-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
@@ -18,7 +18,7 @@
 </div>
 
 <!-- LATEST_VERSION_START -->
-> 🚀 **Latest Update — HorizonZ v3.0 (`HZ-INGAME-BLACKSCREEN-SYNC-v3.0`, `3.0.0-HorizonZ`, `versionCode 71`)**: Updates the in-game startup and session handoff path (transparent splash overlay, launcher/game lifecycle handling, direct session-file account handoff, and stale empty asset-index cleanup) and adds bidirectional content synchronization across `home`, `profiles/slot-N`, and `.local/horizon-client/26.3` for the Manager, Store, and game lifecycle.
+> 🚀 **Latest Update — HorizonZ v3.1 (`HZ-REPAIR-v3.0-FileBoolean-v3.1`, `3.1.0-HorizonZ`, `versionCode 72`)**: Fix nullable `File?` import-result handling at all three URI import call sites (wallpaper, modpack, and file imports) by deriving explicit Boolean success flags; align app and CI metadata to `3.1.0-HorizonZ` (`versionCode 72`).
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
@@ -29,7 +29,7 @@
 - 🧩 **Two-Way Store & Manager Synchronization**: Browse, download, install, and update **Mods (`.hmod` containing `mod.wasm`)**, **Native Mods (`.hnmod`)**, **Shader Packs (`.hshader`)**, **Resource Packs**, and **Modpacks (`.hpack`)** from the `playhorizon.dev/mods` catalog.
 - 🧠 **Configurable RAM Budget**: Configures the engine memory budget (`horizon-memory.txt` & `WGPU_MEMORY_BUDGET_MB`) via a device-RAM-aware slider, defaulting to **Unlimited (OS Limit)**.
 - 🎨 **Wardrobe & 3D Skin Studio**: Supports the `schema: 1` `horizon-appearance.json` and `wardrobe/wardrobe.json` contract (`wardrobe/images/<sha256>.png` with 1 MiB PNG validation), live 3D character preview (360° touch rotation & walking animation), **Wide (4px)** / **Slim (3px)** arm model detection, and **Offline**, **Microsoft**, and **Ely.by** (with optional 6-digit 2FA) account profiles.
-- 🎨 **Monet / Material You & Custom Dark Themes**: Includes `MATERIAL_YOU` (Default), `EMBERMIRE`, `HORIZON_RUST`, and `AMOLED_EMERALD` themes with a hardware-accelerated navigation rail, and pauses launcher UI timers and `WebView` instances before finishing the launcher activity on game handoff.
+- 🎨 **Monet / Material You & Custom Dark Themes**: Includes `MATERIAL_YOU` (Default), `EMBERMIRE`, `HORIZON_RUST`, and `AMOLED_EMERALD` themes with a hardware-accelerated navigation rail, and pauses launcher UI timers and `WebView` instances during game handoff while keeping the launcher task available for return from the game.
 
 ## ⚙️ Architecture & Technical Overview
 
@@ -64,20 +64,23 @@
 
 ## 📥 Source & Release Summary
 
-### 📦 HorizonZ v3.0 Summary (`versionCode 71` • `3.0.0-HorizonZ`)
-- **Configured CI Target ABIs**: [HorizonZ-Launcher-3.0-arm64-v8a.apk](https://github.com/Fadiba21/Horizonz-Launcher/releases) (64-bit ARMv8) and [HorizonZ-Launcher-3.0-armeabi-v7a.apk](https://github.com/Fadiba21/Horizonz-Launcher/releases) (32-bit ARMv7) when built via `.github/workflows/build-apk.yml`.
-- **What's New in v3.0 (`HZ-INGAME-BLACKSCREEN-SYNC-v3.0`)**:
-  - **Game startup and session handoff (`HorizonActivity.java`, `ZalithMainActivity.kt`, `scripts/patch_horizon_direct_boot.py`, `HorizonNativeBridge.kt` + `BBS/` mirrors)**:
-    - Replaces the opaque black splash window with a transparent, non-focusable, non-touchable window and restores decor focus when the splash is dismissed.
-    - Removes launcher task finishing and process termination from the game-entry hibernation callback; adds a Rust exit guard set after the game ends, emits `100|Main Menu Ready` only while a game is active, and retains fallback pages while an error or worker is present.
-    - Writes direct account-selection fields for the `HORIZON_SESSION_FILE` handoff path and removes stale empty `asset-index.json` markers.
-  - **Two-way content synchronization and Manager/Store operations (`HorizonNativeBridge.kt`, `ZalithMainActivity.kt`, `scripts/patch_horizon_direct_boot.py` + `BBS/` mirrors)**:
-    - Synchronizes mods, shaders, resource packs, saves, screenshots, modpacks, and related state files across `home`, `profiles/slot-N`, and `.local/horizon-client/26.3` at game launch/return, launcher resume, and Manager or Store refresh.
-    - Extends toggle, delete, import, install, and uninstall handling across runtime directories, including bundled-mod lookup, resource-pack validation, original filenames on URI import, and a Modpacks category.
+### 📦 HorizonZ v3.1 Summary (`versionCode 72` • `3.1.0-HorizonZ`)
+- **Configured CI Target ABIs**: [HorizonZ-Launcher-3.1-arm64-v8a.apk](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) (64-bit ARMv8) and [HorizonZ-Launcher-3.1-armeabi-v7a.apk](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) (32-bit ARMv7) when built via `.github/workflows/build-apk.yml`.
+- **What's New in v3.1 (`HZ-REPAIR-v3.0-FileBoolean-v3.1`)**: Fix nullable `File?` import-result handling at all three URI import call sites (wallpaper, modpack, and file imports) by deriving explicit Boolean success flags; align app and CI metadata to `3.1.0-HorizonZ` (`versionCode 72`).
+- **What's New in v3.0 (`HZ-INGAME-BLACKSCREEN-SYNC-v3.0`, `versionCode 71` • `3.0.0-HorizonZ`, commit `dbe3f0d94da4b6fd0d250e31a6ad2860374c6606`)**:
+  - **In-Game Black Screen Resolution (`HorizonActivity.java`, `ZalithMainActivity.kt`, `scripts/patch_horizon_direct_boot.py`, `HorizonNativeBridge.kt` + `BBS/` Mirrors)**:
+    - **Transparent Splash Window (`HorizonActivity.java`)**: Replaced the black `splashDialog` background with a transparent window and set `FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCHABLE`; requests decor focus when the splash is dismissed.
+    - **Launcher-to-Game Process Transition (`ZalithMainActivity.kt`)**: Removed `finishAndRemoveTask()` and `Process.killProcess(Process.myPid())` from `onEnterGameHibernation` during `:game` startup; the code sets the launcher/game hibernation flags and invokes its memory-cache cleanup path.
+    - **`GAME_HAS_EXITED` Guard (`scripts/patch_horizon_direct_boot.py`)**: Replaced the earlier `GAME_LAUNCHED_ONCE` check with a `GAME_HAS_EXITED` flag set in `restore_launcher` after the game ends, so startup surface events are evaluated against whether gameplay has ended.
+    - **Main Menu Ready Milestone & Fallback Page Conditions**: Emits `100|Main Menu Ready` in `resumed()` and `about_to_wait()` only when `self.game.is_some()`, and keeps `Launcher::draw_pages` active when `self.error.is_some() || self.worker.is_some()`.
+    - **Direct `accounts.json` Handoff & Empty `asset-index.json` Cleanup (`HorizonNativeBridge.kt`)**: Sets `selected = JSONObject.NULL` and `offline_selected = activeAccount.username` in `accounts.json` while supplying authenticated credentials via `HORIZON_SESSION_FILE`; adds cleanup logic for stale empty `asset-index.json` markers.
+  - **Two-Way Content Manager, Store Downloader & Engine Synchronization (`HorizonNativeBridge.kt`, `ZalithMainActivity.kt`, `scripts/patch_horizon_direct_boot.py` + `BBS/` Mirrors)**:
+    - **Bidirectional 3-Directory Sync (`syncAllContentDirectoriesTwoWay` & `sync_horizonz_engine_back_to_home`)**: Synchronizes `horizon-mods`, `shaderpacks`, `resourcepacks`, `saves`, `screenshots`, `horizon-packs`, and state files (`options.txt`, `options_horizon.txt`, `horizon-mods.txt`, `hmods.txt`, `hmod_list.json`, `horizon-shaders.txt`, `shaderpacks.txt`, `selected_shader.txt`) across `home`, `profiles/slot-N`, and `.local/horizon-client/26.3` before game launch, on in-game exit (`restore_launcher`), on launcher resume (`ON_RESUME`), and when opening/refreshing the Manager or Store.
+    - **Multi-Directory Toggle, Delete, Import & Store Install/Uninstall**: Updates `isContentItemEnabled`, `setContentItemEnabled`, `syncAndRepairShadersStorage`, `syncAndRepairModsStorage`, `deleteContentItemWithSync`, `uninstallStoreItem`, `downloadAndInstallStoreItem`, and `importUriToDestination` to operate across all three runtime directories (`getAllRuntimeDirs(home, profileHome)`), check bundled `builtin-mods/<id>.hmod` assets first, validate Resource Pack ZIPs (`pack.mcmeta`), preserve original filenames on URI import, and add a dedicated **Modpacks** category in `CleanFilesViewport`.
 - **What's New in v2.9 (`HZ-REPAIR-v2.8-metadata-v2.9`)**:
   - **`allRuntimeDirs` Scope & Typed Receiver Repair in `HorizonNativeBridge.kt` (+ `BBS/` Mirror)**: Added class-scope `private fun getAllRuntimeDirs(home: File, profileHome: File): List<File>` (lines `1734..1737`) and declared `val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)` with explicit `allRuntimeDirs.forEach { dir: File ->` in `syncNativeHorizonAccountAndCatalog` (line `1745`), `resetTouchKeypadLayout` (lines `2217..2218`, previously `2213:9`), `setContentItemEnabled` (lines `2317..2318`, previously `2312:9`), and `recordInstalledStoreItem` (lines `3910..3911`, previously `3904:9`) in `packaging/android/java/dev/horizon/android/bridge/HorizonNativeBridge.kt` and `BBS/runtime-rust/patched_active/packaging/android/java/dev/horizon/android/bridge/HorizonNativeBridge.kt`.
   - **Aligned `v2.9` Metadata (`HZ-REPAIR-v2.8-metadata-v2.9`)**: Aligned `packaging/android/build.gradle` (`versionCode 70`, `versionName '2.9.0-HorizonZ'`), `INSTALLED_LAUNCHER_VERSION = "2.9"`, `HorizonActivity.java` + `BBS/` mirror (`expectedStamp = "2.9-0.7.7-150a414"`), `scripts/patch_horizon_direct_boot.py` + `BBS/` mirror (`User-Agent: HorizonZ-CI/2.9`), `.github/workflows/build-apk.yml` (`HorizonZ-Launcher-2.9-${{ matrix.abi }}.apk`, `horizonz-v2.9.0-build-${{ github.run_number }}`), and `BBS/upstream_state.json`, `BBS/custom_runtime_edits.json`, and `BBS/sync_and_merge_bbs.py` (`horizonz_version: "2.9"`, `launcher_version` / `version: "2.9.0-HorizonZ"`, `repair_request_id: "HZ-REPAIR-v2.8-metadata-v2.9"`). Note that candidate `v2.8` (`HZ-REPAIR-v2.7-8bbb561-allRuntimeDirs-v2.8`) failed static metadata QA and remains `REJECTED / NOT APPLIED / NOT BUILT`.
-  - **Historical Compile & Static QA Record (Compilation/Runtime Limitation: `UNTESTED`)**:
+  - **Historical v2.5-v2.7 Compile & Static QA Record**:
     - **`v2.5` (commit `8fa0e81`, CI run `42132294958`)**: `packaging/android/java/dev/horizon/android/ui/ZalithMainActivity.kt:3604:57` failed with `Unresolved reference: scope` on both `arm64-v8a` and `armeabi-v7a`; Rust build passed, Release skipped.
     - **`v2.6` (commit `6cb1b39b67e4c8e3e14bc4c0ed23731465cb15ad`, CI run `42134511803`)**: `ZalithMainActivity.kt:3628:57` failed with `Unresolved reference: scope` alongside `HorizonNativeBridge.kt` `allRuntimeDirs` / `exists` / `add` and downstream type-inference and overload-resolution failures on both ABIs. `val scope = rememberCoroutineScope()` in `CleanAccountsAndSkinsViewport` and its asynchronous Ely.by authentication flow (`Dispatchers.IO`, `HorizonNativeBridge.authenticateElyByAccount`) remain retained in `ZalithMainActivity.kt`.
     - **`v2.7` (commit `8bbb5618b6cf844707f067bb960f7323eda63fd2`, CI run `42136917724`, `horizonz-v27-failed-log.txt`)**: `compileReleaseKotlin` failed on both `arm64-v8a` and `armeabi-v7a` with the exact same 47 diagnostics in `packaging/android/java/dev/horizon/android/bridge/HorizonNativeBridge.kt`, all addressed by the `getAllRuntimeDirs` / `allRuntimeDirs: List<File>` repair in `v2.9`:
@@ -93,7 +96,6 @@
         - `startsWith` (2) at `2378:34`, `2401:34`: `fun String.startsWith(prefix: String, ignoreCase: Boolean = ...): Boolean`, `fun CharSequence.startsWith(prefix: CharSequence, ignoreCase: Boolean = ...): Boolean`, `fun File.startsWith(other: String): Boolean`.
         - `joinToString` (3) at `2347:53`, `2384:43`, `2417:43`: `fun <T> Array<out T>.joinToString(separator: CharSequence = ..., prefix: CharSequence = ..., postfix: CharSequence = ..., limit: Int = ..., truncated: CharSequence = ..., transform: ((T) -> CharSequence)? = ...): String`, `fun BooleanArray.joinToString(...): String`, `fun ByteArray.joinToString(...): String`, `fun CharArray.joinToString(...): String`, `fun DoubleArray.joinToString(...): String`, `fun FloatArray.joinToString(...): String`, `fun IntArray.joinToString(...): String`, `fun LongArray.joinToString(...): String`, `fun ShortArray.joinToString(...): String`, `fun <T> Iterable<T>.joinToString(...): String`, `fun <T> Sequence<T>.joinToString(...): String`.
         - `plus` (3) at `2347:72`, `2384:62`, `2417:62`: `fun String?.plus(other: Any?): String`, `fun <T> Array<T>.plus(element: T): Array<T>`, `fun <T> Collection<T>.plus(element: T): List<T>`, `fun <T> Iterable<T>.plus(element: T): List<T>`, `fun <T> Set<T>.plus(element: T): Set<T>`, `fun <T> Sequence<T>.plus(element: T): Sequence<T>`, `fun Char.plus(other: String): String`.
-    - **Verification Scope Limitation**: Only static reads, JSON parsing, Python AST parsing, source comparisons, and ZIP integrity checks were performed; Kotlin/Rust compilation and Android runtime execution remain **UNTESTED** (`NOT APPLIED / NOT BUILT`).
 - **What's New in v2.7 (`HZ-REPAIR-v2.5-8fa0e81-scope-v2.7`, `versionCode 68` • `2.7.0-HorizonZ`, commit `8bbb5618b6cf844707f067bb960f7323eda63fd2`)**:
   - **Lexical Coroutine Scope Fix in `CleanAccountsAndSkinsViewport` (`ZalithMainActivity.kt`)**: Added `val scope = rememberCoroutineScope()` in `CleanAccountsAndSkinsViewport` so `scope.launch` in the Ely.by authentication button resolves to the composable's lifecycle-bound `CoroutineScope`, and aligned `v2.7` (`2.7.0-HorizonZ`, `versionCode 68`) metadata.
 - **What's New in v2.6**:
@@ -108,13 +110,13 @@
   - **Upstream `Vasysik/horizon-android` Integration (`c2665c8` → `150a414`)**: Retains pinned commit `150a414b09a18c900489d9462a7fc035dae744b7` (`branch: android`), `horizon-appearance.json` (`schema: 1`) and `wardrobe/wardrobe.json` (`wardrobe/images/<sha256>.png`) staging, and `AccountType.ELY_BY` sign-in UI with optional 6-digit 2FA without storing passwords or 2FA codes on disk.
 
 ### 🚀 Quick Start Steps
-1. **Build or Install the APK**: Build or download the APK matching your device ABI (`arm64-v8a` or `armeabi-v7a`) from [**Releases**](https://github.com/Fadiba21/Horizonz-Launcher/releases).
+1. **Build or Install the APK**: Build or download the APK matching your device ABI (`arm64-v8a` or `armeabi-v7a`) from [**Releases**](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases).
 2. **Download 26.3 Assets**: Open the **Game & Assets** tab and download the official Minecraft 26.3 assets until progress reaches **100%**.
 3. **Configure AI Agent (Optional)**: Open **Settings > AI Agent**, paste your API key from [Google AI Studio](https://aistudio.google.com/apikey) (stored locally on your device), select a model (`Gemini 4 Argon`, `Gemini 3.8`, `Gemini 3.5 Flash-Lite`, etc.), and tap **Test Gemini Connection**.
 4. **Launch & Play**: Tap **PLAY** on the Dashboard to start Minecraft 26.3; tap the **`AI`** button at the top-left of the in-game screen or type `@ai <message>` in chat at any time to use the AI assistant.
 
 ## 📜 License & Credits
 
-- 🔗 **Fork Repository**: [Fadiba21/Horizonz-Launcher](https://github.com/Fadiba21/Horizonz-Launcher)
+- 🔗 **Fork Repository**: [Fadiba21/Horizonz-Launcher](https://github.com/Fadiba21/Horizonz-Launcher-Android)
 - 📱 **Upstream Android Runtime**: [Vasysik/horizon-android](https://github.com/Vasysik/horizon-android) (`branch: android`, pinned commit `150a414b09a18c900489d9462a7fc035dae744b7`)
 - 🦀 **Core Rust Engine**: [horizon-rust/horizon](https://github.com/horizon-rust/horizon) (`Apache-2.0`)

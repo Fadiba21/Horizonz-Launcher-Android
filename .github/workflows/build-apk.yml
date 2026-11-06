@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 3.0 APK (${{ matrix.abi }})
+    name: Build HorizonZ 3.1 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 3.0 Patches
+      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 3.1 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           UPSTREAM_TARGET_COMMIT="150a414b09a18c900489d9462a7fc035dae744b7"
@@ -161,7 +161,7 @@ jobs:
       - name: Cache Rust Engine Build
         uses: Swatinem/rust-cache@v2
         with:
-          key: horizon-real-engine-v29-150a414-${{ matrix.rust_target }}
+          key: horizon-real-engine-v31-150a414-${{ matrix.rust_target }}
 
       - name: Compile Real Horizon Rust Engine (libhorizon_android.so) & Prestage Controls (${{ matrix.abi }})
         run: |
@@ -186,7 +186,7 @@ jobs:
           TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export HORIZON_ANDROID_PUBLIC=1
-          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz29')"
+          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz31')"
           export HORIZON_ANDROID_BUILD_DIRTY="false"
           export CARGO_PROFILE_RELEASE_LTO=false
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -236,18 +236,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-3.0-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-3.1-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-3.0-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-3.0-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-3.1-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-3.1-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 3.0 Release APKs
+    name: Publish HorizonZ 3.1 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -267,18 +267,11 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v3.0.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v3.0 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v3.1.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v3.1 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            ## HorizonZ - Launcher v3.0 (Android Fork of `Vasysik/horizon-android` `150a414` & `horizon-rust/horizon` 26.3)
-            - **What's New in v3.0 (`HZ-INGAME-BLACKSCREEN-SYNC-v3.0`)**:
-              - **Game startup and session handoff (`HorizonActivity.java`, `ZalithMainActivity.kt`, `scripts/patch_horizon_direct_boot.py`, `HorizonNativeBridge.kt` + `BBS/` mirrors)**:
-                - Replaces the opaque black splash window with a transparent, non-focusable, non-touchable window and restores decor focus when the splash is dismissed.
-                - Removes launcher task finishing and process termination from the game-entry hibernation callback; adds a Rust exit guard set after the game ends, emits `100|Main Menu Ready` only while a game is active, and retains fallback pages while an error or worker is present.
-                - Writes direct account-selection fields for the `HORIZON_SESSION_FILE` handoff path and removes stale empty `asset-index.json` markers.
-              - **Two-way content synchronization and Manager/Store operations (`HorizonNativeBridge.kt`, `ZalithMainActivity.kt`, `scripts/patch_horizon_direct_boot.py` + `BBS/` mirrors)**:
-                - Synchronizes mods, shaders, resource packs, saves, screenshots, modpacks, and related state files across `home`, `profiles/slot-N`, and `.local/horizon-client/26.3` at game launch/return, launcher resume, and Manager or Store refresh.
-                - Extends toggle, delete, import, install, and uninstall handling across runtime directories, including bundled-mod lookup, resource-pack validation, original filenames on URI import, and a Modpacks category.
+            ## HorizonZ - Launcher v3.1
+            Fix nullable `File?` import-result handling at all three URI import call sites (wallpaper, modpack, and file imports) by deriving explicit Boolean success flags; align app and CI metadata to `3.1.0-HorizonZ` (`versionCode 72`).
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt

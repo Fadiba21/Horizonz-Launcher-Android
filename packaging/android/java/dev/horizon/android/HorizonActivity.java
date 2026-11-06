@@ -1389,7 +1389,7 @@ public final class HorizonActivity extends NativeActivity {
             File homeDir = getFilesDir();
             if (homeDir == null) return;
             if (!homeDir.exists()) homeDir.mkdirs();
-            final String expectedStamp = "3.0-0.7.7-150a414";
+            final String expectedStamp = "3.1-0.7.7-150a414";
             File stampFile = new File(homeDir, "engine-data-version.txt");
             String currentStamp = stampFile.exists() ? readSmallTextFile(stampFile) : "";
             File engineZip = new File(homeDir, "engine-data.zip");

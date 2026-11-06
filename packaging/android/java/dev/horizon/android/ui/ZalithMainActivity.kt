@@ -2473,17 +2473,19 @@ private fun CleanHomeViewport(
 
     val wallpaperPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            HorizonNativeBridge.importUriToDestination(
+            val importedWallpaper: File? = HorizonNativeBridge.importUriToDestination(
                 context,
                 uri,
                 "custom_wallpapers",
                 "mc_custom_${System.currentTimeMillis()}.jpg",
                 logEnabled
             )
-            customWallpapers = HorizonNativeBridge.getCustomWallpapers(context)
-            wallpaperIndex = DASHBOARD_WALLPAPERS.size
-            if (isVideoMode) {
-                onConfigChange(config.copy(backgroundMode = HorizonBackgroundMode.WALLPAPER, useYoutubeTrailerWallpaper = false))
+            if (importedWallpaper != null) {
+                customWallpapers = HorizonNativeBridge.getCustomWallpapers(context)
+                wallpaperIndex = DASHBOARD_WALLPAPERS.size
+                if (isVideoMode) {
+                    onConfigChange(config.copy(backgroundMode = HorizonBackgroundMode.WALLPAPER, useYoutubeTrailerWallpaper = false))
+                }
             }
         }
     }
@@ -4694,15 +4696,21 @@ private fun CleanStoreViewport(
 
     val modpackImportPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            HorizonNativeBridge.importUriToDestination(
+            val importedPack: File? = HorizonNativeBridge.importUriToDestination(
                 context,
                 uri,
                 "horizon-packs",
                 "imported_${System.currentTimeMillis()}.hpack",
-                logEnabled
+                logEnabled,
+                profileSlot
             )
+            val packOk: Boolean = importedPack != null
             refreshTrigger += 1
-            Toast.makeText(context, "Horizon Modpack (.hpack) berhasil diimpor!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                context,
+                if (packOk) "Horizon Modpack (.hpack) berhasil diimpor!" else "Gagal mengimpor Horizon Modpack (.hpack).",
+                Toast.LENGTH_SHORT
+            ).show()
         }
     }
 
@@ -6375,7 +6383,7 @@ private fun CleanFilesViewport(
                 else -> ".zip"
             }
             scope.launch {
-                val ok = withContext(Dispatchers.IO) {
+                val importedFile: File? = withContext(Dispatchers.IO) {
                     HorizonNativeBridge.importUriToDestination(
                         context,
                         uri,
@@ -6385,6 +6393,7 @@ private fun CleanFilesViewport(
                         profileSlot
                     )
                 }
+                val ok: Boolean = importedFile != null
                 refreshCount += 1
                 Toast.makeText(
                     context,
