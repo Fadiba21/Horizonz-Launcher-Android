@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "2.5"
+    const val INSTALLED_LAUNCHER_VERSION = "2.6"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -207,6 +207,7 @@ object HorizonNativeBridge {
     private val modDetailCache = java.util.concurrent.ConcurrentHashMap<String, ModPackageDetailInfo>()
     private val saveDetailCache = java.util.concurrent.ConcurrentHashMap<String, WorldSaveDetailInfo>()
     private val packDetailCache = java.util.concurrent.ConcurrentHashMap<String, ResourcePackDetailInfo>()
+    private val skinDigestCache = java.util.concurrent.ConcurrentHashMap<String, Pair<Long, String>>()
 
     val OFFICIAL_MINECRAFT_TRAILERS_FALLBACK = listOf(
         MinecraftTrailerVideo(
@@ -1591,13 +1592,66 @@ object HorizonNativeBridge {
             }
         }
 
-        val keypadFile = File(profileHome, "horizon-keypad.json")
+        val keypadFile = File(profileHome, "horizon-keypad.json").takeIf { it.exists() } ?: File(home, "horizon-keypad.json")
         if (keypadFile.exists()) {
             try {
                 val kpObj = JSONObject(keypadFile.readText())
-                if (kpObj.has("enabled")) {
-                    state = state.copy(keypadControls = kpObj.optBoolean("enabled", state.keypadControls))
+                state = state.copy(
+                    keypadControls = kpObj.optBoolean("enabled", state.keypadControls),
+                    sprintToggle = kpObj.optBoolean("sprint_toggle", state.sprintToggle),
+                    inventoryTouchControls = kpObj.optBoolean("inventory_touch", state.inventoryTouchControls)
+                )
+            } catch (ignored: Exception) {
+            }
+        }
+
+        val extrasFile = File(profileHome, "horizon-extras.txt").takeIf { it.exists() } ?: File(home, "horizon-extras.txt")
+        if (extrasFile.exists()) {
+            try {
+                val exMap = mutableMapOf<String, String>()
+                extrasFile.readLines().forEach { line ->
+                    val idx = line.indexOf(':')
+                    if (idx > 0) exMap[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
                 }
+                state = state.copy(
+                    extraFullbright = exMap["fullbright"]?.toBooleanStrictOrNull() ?: state.extraFullbright,
+                    extraDynamicLights = exMap["dynamicLights"]?.toBooleanStrictOrNull() ?: state.extraDynamicLights,
+                    extraAutoReconnect = exMap["autoReconnect"]?.toBooleanStrictOrNull() ?: state.extraAutoReconnect,
+                    extraMouseTweaks = exMap["mouseTweaks"]?.toBooleanStrictOrNull() ?: state.extraMouseTweaks,
+                    extraInventorySort = exMap["sort"]?.toBooleanStrictOrNull() ?: state.extraInventorySort,
+                    discordRichPresence = exMap["discordPresence"]?.toBooleanStrictOrNull() ?: state.discordRichPresence
+                )
+            } catch (ignored: Exception) {
+            }
+        }
+
+        val touchFile = File(profileHome, "horizon-touch.txt").takeIf { it.exists() } ?: File(home, "horizon-touch.txt")
+        if (touchFile.exists()) {
+            try {
+                val tMap = mutableMapOf<String, String>()
+                touchFile.readLines().forEach { line ->
+                    val idx = line.indexOf(':')
+                    if (idx > 0) tMap[line.substring(0, idx).trim()] = line.substring(idx + 1).trim()
+                }
+                val rawScheme = tMap["scheme"] ?: tMap["touch_scheme"]
+                val resolvedScheme = if (!rawScheme.isNullOrBlank()) {
+                    HorizonTouchScheme.entries.firstOrNull { it.serdeKey == rawScheme } ?: state.touchScheme
+                } else state.touchScheme
+                val sx = (tMap["sensitivityX"] ?: tMap["sensitivity_x"])?.toFloatOrNull()?.let { (it * 100f).toInt().coerceIn(20, 250) }
+                    ?: state.touchSensitivityXPercent
+                val sy = (tMap["sensitivityY"] ?: tMap["sensitivity_y"])?.toFloatOrNull()?.let { (it * 100f).toInt().coerceIn(20, 250) }
+                    ?: state.touchSensitivityYPercent
+                val j360 = (tMap["joystick360"] ?: tMap["joystick_360"])?.toBooleanStrictOrNull() ?: state.touch360Joystick
+                val swp = (tMap["swapHandsButton"] ?: tMap["swap_hands"])?.toBooleanStrictOrNull() ?: state.touchSwapHandsButton
+                val vmm = (tMap["virtualMenuMouse"] ?: tMap["virtual_menu_mouse"])?.toBooleanStrictOrNull() ?: state.inventoryVirtualMouse
+                state = state.copy(
+                    touchScheme = resolvedScheme,
+                    touchSensitivityXPercent = sx,
+                    touchSensitivityYPercent = sy,
+                    touch360Joystick = j360,
+                    touchSwapHandsButton = swp,
+                    inventoryVirtualMouse = vmm
+                )
             } catch (ignored: Exception) {
             }
         }
@@ -1683,6 +1737,8 @@ object HorizonNativeBridge {
         config: HorizonConfigState
     ) {
         val profileHome = getProfileHome(home, config.profile)
+        val engine26Home = File(home, ".local/horizon-client/26.3").apply { mkdirs() }
+        val allRuntimeDirs = listOf(home, profileHome, engine26Home).distinctBy { it.absolutePath }
 
         // Matches `crates/horizon-client/src/android/catalog.rs` `struct Config` in v0.7.5 (including flattened `ScreenPreferences` & `device_preferences::Settings`)!
         val androidLauncherJson = JSONObject().apply {
@@ -1717,7 +1773,7 @@ object HorizonNativeBridge {
             put("ram_allocation_mb", config.ramAllocationMb)
             put("ram_unlimited", config.ramAllocationMb <= 0)
         }
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             File(dir, "android-launcher.json").writeText(androidLauncherJson.toString(2))
         }
 
@@ -1742,12 +1798,12 @@ object HorizonNativeBridge {
                 put("offline_selected", activeAccount.username)
             }
         }
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             File(dir, "accounts.json").writeText(accountsJson.toString(2))
             File(dir, "horizon-player.txt").writeText(activeAccount.username)
         }
 
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             val keypadFile = File(dir, "horizon-keypad.json")
             val kpObj = if (keypadFile.exists()) {
                 runCatching { JSONObject(keypadFile.readText()) }.getOrElse { JSONObject() }
@@ -1761,7 +1817,7 @@ object HorizonNativeBridge {
         }
 
         // Sync `horizon-extras.txt` (Fullbright, Dynamic Lights, Auto-Reconnect, Mouse Tweaks, Inventory Sort, Discord Rich Presence)
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             updateKeyValTxtNonDestructively(
                 File(dir, "horizon-extras.txt"),
                 linkedMapOf(
@@ -1778,7 +1834,7 @@ object HorizonNativeBridge {
         }
 
         // Sync `horizon-controller.txt` (Gamepad Vibration, Menu Navigation Focus/Pointer, Sensitivity, Deadzone)
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             updateKeyValTxtNonDestructively(
                 File(dir, "horizon-controller.txt"),
                 linkedMapOf(
@@ -1791,7 +1847,7 @@ object HorizonNativeBridge {
             )
         }
 
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             updateKeyValTxtNonDestructively(
                 File(dir, "horizon-memory.txt"),
                 linkedMapOf(
@@ -1850,6 +1906,11 @@ object HorizonNativeBridge {
                 if (srcPath.isBlank()) return null
                 val f = File(srcPath)
                 if (!f.isFile || f.length() <= 64L || f.length() > 1024L * 1024L) return null
+                val stamp = f.lastModified() xor (f.length() shl 16)
+                val cached = skinDigestCache[f.absolutePath]
+                if (cached != null && cached.first == stamp && File(cached.second).isFile) {
+                    return cached.second
+                }
                 val bytes = f.readBytes()
                 if (bytes.size < 8 || bytes[0] != 0x89.toByte() || bytes[1] != 0x50.toByte()) return f.absolutePath
                 val digest = java.security.MessageDigest.getInstance("SHA-256")
@@ -1859,6 +1920,7 @@ object HorizonNativeBridge {
                 if (!dest.exists() || dest.length() != bytes.size.toLong()) {
                     dest.writeBytes(bytes)
                 }
+                skinDigestCache[f.absolutePath] = stamp to dest.absolutePath
                 return dest.absolutePath
             }
 
@@ -2127,6 +2189,8 @@ object HorizonNativeBridge {
     }
 
     private fun updateOptionsTxtNonDestructively(optionsFile: File, config: HorizonConfigState) {
+        val normalizedFov = String.format(Locale.US, "%.2f", ((config.mcFov.coerceIn(30, 110) - 70f) / 40f))
+        val gammaVal = if (config.extraFullbright) "10.0" else "0.5"
         updateKeyValTxtNonDestructively(
             optionsFile,
             linkedMapOf(
@@ -2134,6 +2198,8 @@ object HorizonNativeBridge {
                 "simulationDistance" to config.mcSimulationDistance.toString(),
                 "maxFps" to config.mcMaxFps.toString(),
                 "guiScale" to config.mcGuiScale.toString(),
+                "fov" to normalizedFov,
+                "gamma" to gammaVal,
                 "enableVsync" to config.mcVsync.toString(),
                 "fullscreen" to config.mcFullscreen.toString(),
                 "toggleSprint" to config.sprintToggle.toString()
@@ -2144,7 +2210,7 @@ object HorizonNativeBridge {
     fun resetTouchKeypadLayout(context: Context, config: HorizonConfigState) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, config.profile)
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             val kpFile = File(dir, "horizon-keypad.json")
             val obj = JSONObject().apply {
                 put("enabled", config.keypadControls)
@@ -2243,7 +2309,7 @@ object HorizonNativeBridge {
     ) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             when (folder) {
                 "mods" -> {
                     val modId = sanitizeModId(fileName)
@@ -3835,7 +3901,7 @@ object HorizonNativeBridge {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
         val cleanId = sanitizeModId(projectId)
-        listOf(home, profileHome).forEach { dir ->
+        allRuntimeDirs.forEach { dir ->
             val regFile = File(dir, "zalith-store-installed.json")
             val obj = if (regFile.exists()) runCatching { JSONObject(regFile.readText()) }.getOrElse { JSONObject() } else JSONObject()
             obj.put(projectId, version)

@@ -249,13 +249,10 @@ data class SavedCustomSkinItem(
 )
 
 /**
- * Launcher Theme Palettes:
- * - Default remains `MATERIAL_YOU` ("Monet / Material You (Default)").
- * - Includes `LIQUID_GLASS` ("Liquid Glass (Kyant0 Backdrop)") powered by `Kyant0/AndroidLiquidGlass`.
+ * Launcher Theme Palettes (Default: `MATERIAL_YOU` "Monet / Material You (Default)").
  */
 enum class ZalithThemePalette(val label: String, val primaryHex: Long, val secondaryHex: Long, val surfaceHex: Long) {
     MATERIAL_YOU("Monet / Material You (Default)", 0xFF64B5F6, 0xFF81C784, 0xFF10131A),
-    LIQUID_GLASS("Liquid Glass (Kyant0 Backdrop)", 0xFF90E4FF, 0xFFE0F7FA, 0xFF0B1017),
     EMBERMIRE("Embermire Dark", 0xFFFF7043, 0xFFFFB74D, 0xFF12151E),
     HORIZON_RUST("Horizon Rust", 0xFFFF5722, 0xFF26A69A, 0xFF0E1218),
     AMOLED_EMERALD("Emerald AMOLED", 0xFF66BB6A, 0xFFA5D6A7, 0xFF090C10)

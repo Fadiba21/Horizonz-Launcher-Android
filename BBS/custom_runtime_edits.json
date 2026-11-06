@@ -1,7 +1,7 @@
 {
   "upstream_repo": "https://github.com/Vasysik/horizon-android.git",
   "upstream_branch": "android",
-  "version": "2.5.0-HorizonZ",
+  "version": "2.6.0-HorizonZ",
   "tracked_runtime_files": [
     "crates/horizon-android/Cargo.toml",
     "crates/horizon-android/src/lib.rs",
@@ -40,7 +40,7 @@
   "upstream_base_commit": "c2665c830fbfe4dc5cf5dea2d541b0895684f604",
   "upstream_target_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
   "upstream_pinned_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
-  "horizonz_version": "2.5",
+  "horizonz_version": "2.6",
   "request_id": "HZ-UPSTREAM-c2665c8-150a414",
   "qa_request_id": "QA-HZ-UPSTREAM-c2665c8-150a414-v25-1",
   "upstream_compare_range": "c2665c830fbfe4dc5cf5dea2d541b0895684f604...150a414b09a18c900489d9462a7fc035dae744b7"

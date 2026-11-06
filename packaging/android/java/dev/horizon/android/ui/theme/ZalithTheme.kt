@@ -48,7 +48,7 @@ fun HorizonZalithTheme(
     content: @Composable () -> Unit
 ) {
     val context = LocalContext.current
-    val colorScheme = if (useDynamicColor && palette != ZalithThemePalette.LIQUID_GLASS && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+    val colorScheme = if (useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         dynamicDarkColorScheme(context)
     } else {
         val primary = Color(palette.primaryHex)
@@ -57,7 +57,7 @@ fun HorizonZalithTheme(
         darkColorScheme(
             primary = primary,
             onPrimary = Color(0xFF0A141D),
-            primaryContainer = primary.copy(alpha = if (palette == ZalithThemePalette.LIQUID_GLASS) 0.28f else 0.22f),
+            primaryContainer = primary.copy(alpha = 0.22f),
             onPrimaryContainer = Color(0xFFE8F8FF),
             secondary = secondary,
             onSecondary = Color(0xFF0A141D),
@@ -67,9 +67,9 @@ fun HorizonZalithTheme(
             onBackground = Color(0xFFF2F6FA),
             surface = surface,
             onSurface = Color(0xFFF2F6FA),
-            surfaceVariant = if (palette == ZalithThemePalette.LIQUID_GLASS) Color(0x44162230) else Color(0xFF1E2433),
+            surfaceVariant = Color(0xFF1E2433),
             onSurfaceVariant = Color(0xFFC4D2E0),
-            outline = if (palette == ZalithThemePalette.LIQUID_GLASS) Color(0x6690E4FF) else Color(0xFF333D52)
+            outline = Color(0xFF333D52)
         )
     }
 

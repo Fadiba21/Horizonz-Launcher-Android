@@ -91,10 +91,6 @@ import dev.horizon.android.R
 import dev.horizon.android.bridge.*
 import dev.horizon.android.model.*
 import dev.horizon.android.ui.theme.HorizonZalithTheme
-import dev.horizon.android.ui.theme.KyantLiquidGlassSidebarRail
-import dev.horizon.android.ui.theme.KyantLiquidGlassSpec
-import dev.horizon.android.ui.theme.liquidGlassInteractiveButton
-import dev.horizon.android.ui.theme.liquidGlassSurface
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -154,19 +150,7 @@ private val MutedSubtitleText: Color get() = activeUiPalette.mutedSubtitleText
 private fun SyncDynamicLauncherPalette(palette: ZalithThemePalette, useDynamicColor: Boolean) {
     val scheme = MaterialTheme.colorScheme
     activeUiPalette = remember(palette, useDynamicColor, scheme.primary, scheme.background) {
-        if (palette == ZalithThemePalette.LIQUID_GLASS) {
-            HorizonDynamicPalette(
-                rootBg = Color(0xFF0A1017),
-                cardSlateBg = Color(0x4215202D),
-                cardRowBg = Color(0x541D2C3D),
-                subRailCapsuleActive = Color(0x558BE0FF),
-                skyBlueAccent = Color(0xFF90E4FF),
-                skyBlueDarkText = Color(0xFF071A24),
-                lavenderBadgeBg = Color(0x4890E4FF),
-                lavenderBadgeText = Color(0xFFE8FAFF),
-                mutedSubtitleText = Color(0xFFB6C7D6)
-            )
-        } else if (useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (useDynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             HorizonDynamicPalette(
                 rootBg = Color(0xFF121619),
                 cardSlateBg = Color(0xFF1E2429),
@@ -180,7 +164,7 @@ private fun SyncDynamicLauncherPalette(palette: ZalithThemePalette, useDynamicCo
             )
         } else {
             when (palette) {
-                ZalithThemePalette.MATERIAL_YOU, ZalithThemePalette.LIQUID_GLASS -> HorizonDynamicPalette(
+                ZalithThemePalette.MATERIAL_YOU -> HorizonDynamicPalette(
                     rootBg = Color(0xFF14181B),
                     cardSlateBg = Color(0xFF22282C),
                     cardRowBg = Color(0xFF2A3136),
@@ -308,8 +292,11 @@ class ZalithMainActivity : ComponentActivity() {
                             }
                         }
                         Lifecycle.Event.ON_STOP -> {
-                            // Pause all launcher UI, video, and timers ONLY after HorizonActivity (:game)
-                            // has actually taken over the foreground!
+                            val cfgSnap = config
+                            val accSnap = activeAccount
+                            scope.launch(Dispatchers.IO) {
+                                HorizonNativeBridge.saveConfig(context, cfgSnap, accSnap)
+                            }
                             if (isLauncherHibernated || isLaunchingSplash) {
                                 isGameProcessSleeping = true
                                 HorizonNativeBridge.releaseMemoryForGameLaunch(context)
@@ -320,6 +307,16 @@ class ZalithMainActivity : ComponentActivity() {
                 }
                 lifecycleOwner.lifecycle.addObserver(observer)
                 onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+            }
+
+            // Debounced background config persistence so slider drags run at full frame rate without flooding disk I/O
+            LaunchedEffect(config, activeAccount.id) {
+                delay(180L)
+                val cfgSnap = config
+                val accSnap = activeAccount
+                withContext(Dispatchers.IO) {
+                    HorizonNativeBridge.saveConfig(context, cfgSnap, accSnap)
+                }
             }
 
             HorizonZalithTheme(
@@ -335,7 +332,6 @@ class ZalithMainActivity : ComponentActivity() {
                     color = LauncherRootBg
                 ) {
                     if (isGameProcessSleeping) {
-                        // Complete 0%-CPU / 0%-GPU / 0%-Audio sleep while the user is inside Minecraft 26.3!
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -351,10 +347,6 @@ class ZalithMainActivity : ComponentActivity() {
                             isHibernated = isGameProcessSleeping || isLaunchingSplash,
                             onConfigChange = { updated ->
                                 config = updated
-                                val accSnapshot = activeAccount
-                                scope.launch(Dispatchers.IO) {
-                                    HorizonNativeBridge.saveConfig(context, updated, accSnapshot)
-                                }
                             },
                             onAccountsChange = { updatedList ->
                                 accounts = updatedList
@@ -1668,7 +1660,6 @@ fun ZalithCleanLauncherScreen(
                 ) {
                     ZalithIconRail(
                         selectedTab = selectedTab,
-                        isLiquidGlass = config.themePalette == ZalithThemePalette.LIQUID_GLASS,
                         onSelectTab = { selectedTab = it }
                     )
 
@@ -1794,7 +1785,6 @@ fun ZalithCleanLauncherScreen(
                                 activeAccount = activeAccount,
                                 activeSkinBitmap = activeSkinBitmap,
                                 installStatus = installStatus,
-                                isLiquidGlass = config.themePalette == ZalithThemePalette.LIQUID_GLASS,
                                 onOpenAccountScreen = { selectedTab = ZalithNavTab.ACCOUNTS },
                                 onOpenVersions = { selectedTab = ZalithNavTab.VERSIONS },
                                 onLaunchOrDownload = handleLaunchOrDownload
@@ -1941,7 +1931,6 @@ private fun ZalithReferenceTopBar(
 @Composable
 private fun ZalithIconRail(
     selectedTab: ZalithNavTab,
-    isLiquidGlass: Boolean = false,
     onSelectTab: (ZalithNavTab) -> Unit
 ) {
     val railTabs = remember {
@@ -1954,28 +1943,63 @@ private fun ZalithIconRail(
             ZalithNavTab.SETTINGS
         )
     }
-    KyantLiquidGlassSidebarRail(
-        tabs = railTabs,
-        selectedTab = selectedTab,
-        isLiquidGlass = isLiquidGlass,
-        trackColor = CardSlateBg,
-        activePillColor = SubRailCapsuleActive,
-        activeIconColor = SkyBlueAccent,
-        inactiveIconColor = MutedSubtitleText,
-        tabIcon = { tab ->
-            when (tab) {
-                ZalithNavTab.HOME -> Icons.Default.Home
-                ZalithNavTab.VERSIONS -> Icons.Default.Download
-                ZalithNavTab.STORE -> Icons.Default.Storefront
-                ZalithNavTab.FILES -> Icons.Default.Extension
-                ZalithNavTab.ACCOUNTS -> Icons.Default.Checkroom
-                ZalithNavTab.LOGS -> Icons.Default.Terminal
-                ZalithNavTab.SETTINGS -> Icons.Default.Settings
+    Surface(
+        shape = RoundedCornerShape(20.dp),
+        color = CardSlateBg,
+        modifier = Modifier
+            .fillMaxHeight()
+            .width(52.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterVertically)
+        ) {
+            railTabs.forEach { tab ->
+                val isSelected = selectedTab == tab
+                val iconScale by animateFloatAsState(
+                    targetValue = if (isSelected) 1.08f else 1.0f,
+                    animationSpec = spring(
+                        dampingRatio = Spring.DampingRatioNoBouncy,
+                        stiffness = Spring.StiffnessMedium
+                    ),
+                    label = "railIconScale"
+                )
+                val iconVec = when (tab) {
+                    ZalithNavTab.HOME -> Icons.Default.Home
+                    ZalithNavTab.VERSIONS -> Icons.Default.Download
+                    ZalithNavTab.STORE -> Icons.Default.Storefront
+                    ZalithNavTab.FILES -> Icons.Default.Extension
+                    ZalithNavTab.ACCOUNTS -> Icons.Default.Checkroom
+                    ZalithNavTab.LOGS -> Icons.Default.Terminal
+                    ZalithNavTab.SETTINGS -> Icons.Default.Settings
+                }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSelected) SubRailCapsuleActive else Color.Transparent,
+                    modifier = Modifier
+                        .size(38.dp)
+                        .animatedPressScale { onSelectTab(tab) }
+                ) {
+                    Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+                        Icon(
+                            imageVector = iconVec,
+                            contentDescription = tab.title,
+                            tint = if (isSelected) SkyBlueAccent else MutedSubtitleText,
+                            modifier = Modifier
+                                .size(19.dp)
+                                .graphicsLayer {
+                                    scaleX = iconScale
+                                    scaleY = iconScale
+                                }
+                        )
+                    }
+                }
             }
-        },
-        tabTitle = { it.title },
-        onSelectTab = onSelectTab
-    )
+        }
+    }
 }
 
 /**
@@ -8106,7 +8130,7 @@ private fun CleanSettingsViewport(
 
                         ZalithSettingDropdownCard(
                             title = "Theme Palette (Default: Monet / Material You)",
-                            description = "Pilih tema tampilan Launcher: Monet (Default) atau Liquid Glass (Kyant0 AndroidLiquidGlass Backdrop dengan efek refraksi & animasi spring)",
+                            description = "Pilih palet warna tampilan Launcher (Default: Monet / Material You)",
                             selectedItem = config.themePalette,
                             options = ZalithThemePalette.entries,
                             itemLabel = { it.label },
@@ -8378,30 +8402,16 @@ private fun ZalithLaunchSidebar(
     activeAccount: ZalithAccount,
     activeSkinBitmap: Bitmap,
     installStatus: AssetInstallStatus,
-    isLiquidGlass: Boolean = false,
     onOpenAccountScreen: () -> Unit,
     onOpenVersions: () -> Unit,
     onLaunchOrDownload: () -> Unit
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = if (isLiquidGlass) Color.Transparent else CardSlateBg,
+        color = CardSlateBg,
         modifier = Modifier
             .fillMaxHeight()
             .width(182.dp)
-            .liquidGlassSurface(
-                enabled = isLiquidGlass,
-                spec = KyantLiquidGlassSpec(
-                    cornerRadius = 22.dp,
-                    refractionHeightPx = 32f,
-                    refractionAmountPx = -40f,
-                    chromaticAberration = 1.45f,
-                    surfaceTint = Color(0x2E90E4FF),
-                    surfaceCover = Color(0x480D151E),
-                    rimHighlightAlpha = 0.68f,
-                    enableAgslShader = true
-                )
-            )
     ) {
         Column(
             modifier = Modifier

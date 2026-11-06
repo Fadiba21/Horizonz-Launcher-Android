@@ -9,7 +9,7 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.5-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v2.6-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-android_150a414-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
@@ -18,7 +18,7 @@
 </div>
 
 <!-- LATEST_VERSION_START -->
-> 🚀 **Latest Update — HorizonZ v2.5 (`QA-HZ-UPSTREAM-c2665c8-150a414-v25-1`)**: Focused QA source repair over `HorizonZ v2.4` (`HZ-UPSTREAM-c2665c8-150a414`, pinned to `Vasysik/horizon-android` commit `150a414b09a18c900489d9462a7fc035dae744b7` on `branch: android`), updating `HorizonNativeBridge.prepareReadOnceSessionFile` (and its active `BBS/` mirror) to write `"user_type": "ely"` instead of `"ely_by"` so the generated session JSON matches `AuthSession::parse` in `crates/horizon-client-render/src/auth.rs` at `150a414b09a18c900489d9462a7fc035dae744b7`, and aligning `v2.5` (`2.5.0-HorizonZ`, `versionCode 66`) version and BBS metadata while retaining all `v2.4`/`v2.3` changes.
+> **Latest Update — HorizonZ v2.6** (`2.6.0-HorizonZ`, versionCode 67): removes the Liquid Glass theme, adds two-way launcher/game settings synchronization, and updates the in-game AI popup.
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
@@ -29,7 +29,7 @@
 - 🧩 **Two-Way Store & Manager Synchronization**: Browse, download, install, and update **Mods (`.hmod` containing `mod.wasm`)**, **Native Mods (`.hnmod`)**, **Shader Packs (`.hshader`)**, **Resource Packs**, and **Modpacks (`.hpack`)** from the `playhorizon.dev/mods` catalog.
 - 🧠 **Configurable RAM Budget**: Configures the engine memory budget (`horizon-memory.txt` & `WGPU_MEMORY_BUDGET_MB`) via a device-RAM-aware slider, defaulting to **Unlimited (OS Limit)**.
 - 🎨 **Wardrobe & 3D Skin Studio**: Supports the `schema: 1` `horizon-appearance.json` and `wardrobe/wardrobe.json` contract (`wardrobe/images/<sha256>.png` with 1 MiB PNG validation), live 3D character preview (360° touch rotation & walking animation), **Wide (4px)** / **Slim (3px)** arm model detection, and **Offline**, **Microsoft**, and **Ely.by** (with optional 6-digit 2FA) account profiles.
-- 🪟 **Monet & Kyant0 Liquid Glass Themes**: Includes `LIQUID_GLASS` refractive glassmorphic cards and a draggable liquid glass pill sidebar indicator alongside the default `MATERIAL_YOU` theme, and pauses launcher UI timers and `WebView` instances before finishing the launcher activity on game handoff.
+- 🎨 **Monet / Material You & Custom Dark Themes**: Includes `MATERIAL_YOU` (Default), `EMBERMIRE`, `HORIZON_RUST`, and `AMOLED_EMERALD` themes with a hardware-accelerated navigation rail, and pauses launcher UI timers and `WebView` instances before finishing the launcher activity on game handoff.
 
 ## ⚙️ Architecture & Technical Overview
 
@@ -64,13 +64,17 @@
 
 ## 📥 Source & Release Summary
 
-### 📲 Download HorizonZ v2.5 (`versionCode 66` • `2.5.0-HorizonZ`)
+### 📲 Download HorizonZ v2.6 (`versionCode 67` • `2.6.0-HorizonZ`)
+
 - **Configured APK ABIs**: `arm64-v8a` (64-bit ARMv8) and `armeabi-v7a` (32-bit ARMv7).
 - **Download**: Choose the APK matching your device from [GitHub Releases](https://github.com/Fadiba21/Horizonz-Launcher/releases). The workflow publishes the release only after both configured ABI builds succeed.
+- **What's New in v2.6**:
+  - **Liquid Glass removal and launcher UI updates:** Removes `LiquidGlassBackdrop.kt` and the `LIQUID_GLASS` palette, replaces the sidebar with a Compose navigation rail, debounces configuration saves by 180 ms, saves configuration on activity stop, and caches SHA-256 skin digests.
+  - **Two-way launcher/game settings synchronization:** Synchronizes `options.txt` (including `fov` and `gamma`), `horizon-extras.txt`, `horizon-mods.txt`, `hmod_list.json`, `horizon-shaders.txt`, `horizon-keypad.json`, `horizon-touch.txt`, `horizon-controller.txt`, `horizon-memory.txt`, and `horizon-appearance.json` across `home`, `profileHome`, and `.local/horizon-client/26.3`; reads game-side changes back on launcher resume.
+  - **Animated in-game AI popup:** Adds spring-style entrance/exit animation, a pulsing status indicator, Quick Action buttons, cached local control-socket metadata, and tail-only game-log polling with `RandomAccessFile`.
 - **What's New in v2.5 (`QA-HZ-UPSTREAM-c2665c8-150a414-v25-1`)**:
-  - **Ely.by session discriminator fix:** Writes `"user_type": "ely"` instead of `"ely_by"` in the read-once session JSON created by `HorizonNativeBridge.prepareReadOnceSessionFile`, matching `AuthSession::parse` in `crates/horizon-client-render/src/auth.rs` at pinned upstream commit `150a414b09a18c900489d9462a7fc035dae744b7`.
-  - **Version and BBS metadata alignment:** Sets the Android release to `2.5.0-HorizonZ` (`versionCode 66`) and synchronizes launcher and BBS version metadata for v2.5.
-
+  - **Ely.by Session Discriminator Fix (`"user_type": "ely"`)**: Updated `HorizonNativeBridge.prepareReadOnceSessionFile` in `packaging/android/java/dev/horizon/android/bridge/HorizonNativeBridge.kt` (and its identical active mirror in `BBS/runtime-rust/patched_active/.../HorizonNativeBridge.kt`) to write `put("user_type", "ely")` instead of `"ely_by"`, matching `AuthSession::parse` in `crates/horizon-client-render/src/auth.rs` at pinned commit `150a414b09a18c900489d9462a7fc035dae744b7` (`t != "msa" && t != "ely"` / `ely: field("user_type") == Some("ely")`).
+  - **Aligned v2.5 Version & BBS Metadata**: Bumped `packaging/android/build.gradle` (`versionCode 66`, `versionName '2.5.0-HorizonZ'`), `INSTALLED_LAUNCHER_VERSION = "2.5"`, `HorizonActivity.java` (`expectedStamp = "2.5-0.7.7-150a414"`), `scripts/patch_horizon_direct_boot.py` (and `BBS/` mirror), `.github/workflows/build-apk.yml`, `BBS/upstream_state.json`, `BBS/custom_runtime_edits.json`, and `BBS/sync_and_merge_bbs.py` to `2.5` / `2.5.0-HorizonZ` (`qa_request_id: "QA-HZ-UPSTREAM-c2665c8-150a414-v25-1"` over `request_id: "HZ-UPSTREAM-c2665c8-150a414"`), keeping historical cached `BBS/runtime-rust/upstream_clean/` hashes explicitly marked as historical `125c672` snapshots without inventing a published upstream release tag.
 - **Retained Changes from v2.4 & v2.3 (`QA-HZ-UPSTREAM-c2665c8-150a414-v24-1` / `HZ-UPSTREAM-c2665c8-150a414`)**:
   - **Kotlin Call & Property Fixes (`v2.4`)**: Retains `config.touchScheme.serdeKey` in `startHorizonGameActivity`, aligned `authenticateElyByAccount` named arguments (`usernameOrEmail`, `passwordRaw`, `totpCodeRaw`) and `Pair<Boolean, ZalithAccount?>` destructuring in `ZalithMainActivity.kt` with fail-closed validation, and `Int`/`IntRange` parameters on the Horizontal (`X`) and Vertical (`Y`) Touch Sensitivity `ZalithSettingSliderCard` calls. Note that in upstream `Vasysik/horizon-android` (`150a414`), touch control scheme and sensitivity are configured in-game under `Options > Controls > Touch Controls`; launcher settings persist these preferences locally in `zalith-config.json`, `android-launcher.json`, and `horizon-touch.txt`.
   - **Upstream `Vasysik/horizon-android` Integration (`c2665c8` → `150a414`)**: Retains pinned commit `150a414b09a18c900489d9462a7fc035dae744b7` (`branch: android`), `horizon-appearance.json` (`schema: 1`) and `wardrobe/wardrobe.json` (`wardrobe/images/<sha256>.png`) staging, and `AccountType.ELY_BY` sign-in UI with optional 6-digit 2FA without storing passwords or 2FA codes on disk.

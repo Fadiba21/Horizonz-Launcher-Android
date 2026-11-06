@@ -68,7 +68,7 @@ def ensure_upstream_include_assets():
             fetched = False
             for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.5"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.6"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read()
                     if data:
@@ -164,7 +164,31 @@ fn sanitize_and_repair_horizon_mods(home: &std::path::Path) {
     }
 }
 
+fn sync_horizonz_runtime_files(home: &std::path::Path) {
+    let engine_dir = home.join(".local/horizon-client").join(horizon_core::VANILLA_VERSION);
+    let _ = std::fs::create_dir_all(&engine_dir);
+    for fname in [
+        "options.txt",
+        "horizon-extras.txt",
+        "horizon-mods.txt",
+        "hmod_list.json",
+        "horizon-shaders.txt",
+        "horizon-keypad.json",
+        "horizon-touch.txt",
+        "horizon-controller.txt",
+        "horizon-memory.txt",
+        "horizon-appearance.json",
+    ] {
+        let src = home.join(fname);
+        let dst = engine_dir.join(fname);
+        if src.is_file() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+}
+
 fn apply_horizonz_shader_and_agent_config(home: &std::path::Path) {
+    sync_horizonz_runtime_files(home);
     // 1. Propagate active shader pack from options.txt / horizon-shaders.txt to HORIZON_SHADER_PACK
     let mut active_shader = String::new();
     if let Ok(sh_txt) = std::fs::read_to_string(home.join("horizon-shaders.txt")) {
@@ -680,7 +704,7 @@ def patch_ingame_ai_agent_and_native_mods():
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.5"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.6"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":

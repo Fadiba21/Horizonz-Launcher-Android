@@ -1,5 +1,10 @@
 package dev.horizon.android;
 
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ObjectAnimator;
+import android.animation.PropertyValuesHolder;
+import android.animation.ValueAnimator;
 import android.app.Dialog;
 import android.app.NativeActivity;
 import android.content.Context;
@@ -21,10 +26,15 @@ import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.animation.AccelerateInterpolator;
+import android.view.animation.DecelerateInterpolator;
+import android.view.animation.OvershootInterpolator;
+import android.widget.HorizontalScrollView;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.LinearLayout;
@@ -46,6 +56,7 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
+import java.io.RandomAccessFile;
 import java.net.HttpURLConnection;
 import java.net.InetSocketAddress;
 import java.net.Socket;
@@ -68,9 +79,17 @@ public final class HorizonActivity extends NativeActivity {
     private HorizonSplashOverlayView splashOverlayView;
     private Dialog aiFloatingButtonDialog;
     private Dialog aiCommandPanelDialog;
+    private View aiFloatingDotView;
+    private ObjectAnimator aiPanelPulseAnimator;
     private volatile boolean aiTaskRunning = false;
     private volatile boolean aiTaskAbortRequested = false;
     private volatile String lastAiReplyText = "Ready. Enter any command or task for Minecraft 26.3.";
+    private volatile long cachedControlMtime = -1L;
+    private volatile String cachedControlHost = "127.0.0.1";
+    private volatile int cachedControlPort = 0;
+    private volatile String cachedControlToken = "";
+    private volatile long lastLogCheckedMtime = -1L;
+    private volatile long lastLogCheckedSize = -1L;
 
     static {
         try {
@@ -213,7 +232,7 @@ public final class HorizonActivity extends NativeActivity {
                         runOnUiThread(this::returnToLauncherAndFinish);
                         break;
                     }
-                    Thread.sleep(400L);
+                    Thread.sleep(750L);
                 } catch (InterruptedException ignored) {
                     break;
                 }
@@ -323,7 +342,7 @@ public final class HorizonActivity extends NativeActivity {
                             }
                         }
                     }
-                    Thread.sleep(1600L);
+                    Thread.sleep(2200L);
                 } catch (Exception ignored) {
                     try { Thread.sleep(2200L); } catch (InterruptedException ie) { break; }
                 }
@@ -342,6 +361,35 @@ public final class HorizonActivity extends NativeActivity {
      * Minimalist, monochrome in-game system button ("AI") integrated directly into the `:game` HUD bar
      * right beside the native `...` button, matching the native monochrome HUD geometry.
      */
+    private void attachPressScaleAnimation(final View view) {
+        view.setOnTouchListener((v, event) -> {
+            int action = event.getActionMasked();
+            if (action == MotionEvent.ACTION_DOWN) {
+                v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(85L)
+                    .setInterpolator(new DecelerateInterpolator()).start();
+            } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(160L)
+                    .setInterpolator(new OvershootInterpolator(1.35f)).start();
+            }
+            return false;
+        });
+    }
+
+    private void updateFloatingDotState() {
+        runOnUiThread(() -> {
+            if (aiFloatingDotView == null) return;
+            GradientDrawable dotBg = new GradientDrawable();
+            dotBg.setShape(GradientDrawable.OVAL);
+            dotBg.setColor(Color.parseColor(aiTaskRunning ? "#8BE0FF" : "#81C784"));
+            aiFloatingDotView.setBackground(dotBg);
+        });
+    }
+
+    /**
+     * Sleek, animated in-game HUD pill ("✦ AI") integrated into the `:game` window:
+     * - Live status indicator dot (emerald when ready, cyan when executing).
+     * - Smooth spring entrance animation and tactile touch-scale feedback.
+     */
     private void showInGameAiFloatingButton(
         final File homeDir,
         final String modelId,
@@ -354,25 +402,45 @@ public final class HorizonActivity extends NativeActivity {
             aiFloatingButtonDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             aiFloatingButtonDialog.setCancelable(false);
 
-            TextView btn = new TextView(this);
-            btn.setText("AI");
-            btn.setTextColor(Color.parseColor("#F4F4F5"));
-            btn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
-            btn.getPaint().setFakeBoldText(true);
-            btn.setGravity(Gravity.CENTER);
-            btn.setPadding(dp(10), dp(5), dp(10), dp(5));
+            LinearLayout pill = new LinearLayout(this);
+            pill.setOrientation(LinearLayout.HORIZONTAL);
+            pill.setGravity(Gravity.CENTER_VERTICAL);
+            pill.setPadding(dp(10), dp(5), dp(11), dp(5));
 
             GradientDrawable bg = new GradientDrawable();
-            bg.setColor(Color.parseColor("#CC0C0C0E"));
-            bg.setCornerRadius(dp(4));
-            bg.setStroke(dp(1), Color.parseColor("#44FFFFFF"));
-            btn.setBackground(bg);
+            bg.setColor(Color.parseColor("#E60D1117"));
+            bg.setCornerRadius(dp(14));
+            bg.setStroke(dp(1), Color.parseColor("#558BE0FF"));
+            pill.setBackground(bg);
 
-            btn.setOnClickListener(v -> {
+            View dot = new View(this);
+            GradientDrawable dotBg = new GradientDrawable();
+            dotBg.setShape(GradientDrawable.OVAL);
+            dotBg.setColor(Color.parseColor(aiTaskRunning ? "#8BE0FF" : "#81C784"));
+            dot.setBackground(dotBg);
+            LinearLayout.LayoutParams dotLp = new LinearLayout.LayoutParams(dp(7), dp(7));
+            dotLp.rightMargin = dp(6);
+            pill.addView(dot, dotLp);
+            aiFloatingDotView = dot;
+
+            TextView label = new TextView(this);
+            label.setText("✦ AI");
+            label.setTextColor(Color.parseColor("#F4F6F8"));
+            label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
+            label.getPaint().setFakeBoldText(true);
+            pill.addView(label);
+
+            attachPressScaleAnimation(pill);
+            pill.setOnClickListener(v -> {
                 showInGameAiCommandPanel(homeDir, modelId, taskPrompt, autonomousActions);
             });
 
-            aiFloatingButtonDialog.setContentView(btn);
+            pill.setAlpha(0f);
+            pill.setTranslationY(-dp(10));
+            pill.setScaleX(0.85f);
+            pill.setScaleY(0.85f);
+
+            aiFloatingButtonDialog.setContentView(pill);
             Window win = aiFloatingButtonDialog.getWindow();
             if (win != null) {
                 win.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
@@ -380,7 +448,7 @@ public final class HorizonActivity extends NativeActivity {
                 lp.width = WindowManager.LayoutParams.WRAP_CONTENT;
                 lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
                 lp.gravity = Gravity.TOP | Gravity.START;
-                lp.x = dp(64);
+                lp.x = dp(62);
                 lp.y = dp(6);
                 lp.flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                     | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -389,18 +457,25 @@ public final class HorizonActivity extends NativeActivity {
                 win.setAttributes(lp);
             }
             aiFloatingButtonDialog.show();
+            pill.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .setDuration(260L)
+                .setInterpolator(new OvershootInterpolator(1.2f))
+                .start();
         } catch (Exception e) {
             Log.w(TAG, "Failed to show in-game AI button: " + e.getMessage());
         }
     }
 
     /**
-     * Minimalist, Monochrome In-Game AI Popup:
-     * - Strictly monochrome palette (#0C0C0E surface, #16161A inner box, #2E2E34 1px border, #F4F4F5 / #A1A1AA text).
-     * - No gimmick buttons or emoji chips — only functional controls:
-     *   Header: Model Name + Status | [Stop] [Clear] [✕]
-     *   Body: Clean scrollable execution & response log
-     *   Footer: Prompt/Command input field + [Run] button
+     * Animated In-Game AI Agent Popup Card:
+     * - Smooth spring entrance (`OvershootInterpolator`) & smooth scale+fade exit animation.
+     * - Animated pulsing status dot & thinking pulse bar when Gemini AI is active.
+     * - One-tap Quick Action chips (`⚡ Status & Pos`, `🏠 Build Shelter`, `⛏️ Mine Wood`, `☀️ Day & Clear`)
+     *   plus auto-scrolling execution terminal and command/prompt input.
      */
     private void showInGameAiCommandPanel(
         final File homeDir,
@@ -412,50 +487,94 @@ public final class HorizonActivity extends NativeActivity {
             if (aiCommandPanelDialog != null && aiCommandPanelDialog.isShowing()) {
                 aiCommandPanelDialog.dismiss();
             }
+            if (aiPanelPulseAnimator != null) {
+                aiPanelPulseAnimator.cancel();
+                aiPanelPulseAnimator = null;
+            }
             aiCommandPanelDialog = new Dialog(this, android.R.style.Theme_Translucent_NoTitleBar);
             aiCommandPanelDialog.requestWindowFeature(Window.FEATURE_NO_TITLE);
             aiCommandPanelDialog.setCancelable(true);
 
-            LinearLayout root = new LinearLayout(this);
+            final LinearLayout root = new LinearLayout(this);
             root.setOrientation(LinearLayout.VERTICAL);
-            root.setPadding(dp(14), dp(12), dp(14), dp(12));
-            GradientDrawable panelBg = new GradientDrawable();
-            panelBg.setColor(Color.parseColor("#F20C0C0E"));
-            panelBg.setCornerRadius(dp(10));
-            panelBg.setStroke(dp(1), Color.parseColor("#FF2E2E34"));
+            root.setPadding(dp(15), dp(12), dp(15), dp(12));
+            GradientDrawable panelBg = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[] { Color.parseColor("#F511161D"), Color.parseColor("#F50B0E13") }
+            );
+            panelBg.setCornerRadius(dp(16));
+            panelBg.setStroke(dp(1), Color.parseColor("#448BE0FF"));
             root.setBackground(panelBg);
 
-            // Header row: Monochrome Title + [Stop] + [Clear] + [✕]
+            // Header row: Pulsing Status Orb + Title + Model Badge + [Stop] + [Clear] + [✕]
             LinearLayout header = new LinearLayout(this);
             header.setOrientation(LinearLayout.HORIZONTAL);
             header.setGravity(Gravity.CENTER_VERTICAL);
 
+            final View statusDot = new View(this);
+            GradientDrawable statusDotBg = new GradientDrawable();
+            statusDotBg.setShape(GradientDrawable.OVAL);
+            statusDotBg.setColor(Color.parseColor(aiTaskRunning ? "#8BE0FF" : "#81C784"));
+            statusDot.setBackground(statusDotBg);
+            LinearLayout.LayoutParams sDotLp = new LinearLayout.LayoutParams(dp(8), dp(8));
+            sDotLp.rightMargin = dp(8);
+            header.addView(statusDot, sDotLp);
+
             final TextView titleTv = new TextView(this);
-            titleTv.setText("AI AGENT  •  " + formatModelDisplayName(modelId) + (aiTaskRunning ? "  [RUNNING]" : ""));
-            titleTv.setTextColor(Color.parseColor("#F4F4F5"));
+            titleTv.setText("HORIZONZ AI  •  " + formatModelDisplayName(modelId) + (aiTaskRunning ? "  [ACTIVE]" : ""));
+            titleTv.setTextColor(Color.parseColor("#F4F6F8"));
             titleTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f);
             titleTv.getPaint().setFakeBoldText(true);
             LinearLayout.LayoutParams titleLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             header.addView(titleTv, titleLp);
 
-            final TextView replyTv = new TextView(this);
+            // Animated Pulse Bar under header
+            final View pulseBar = new View(this);
+            GradientDrawable pulseBg = new GradientDrawable(
+                GradientDrawable.Orientation.LEFT_RIGHT,
+                new int[] { Color.parseColor("#228BE0FF"), Color.parseColor("#FF8BE0FF"), Color.parseColor("#228BE0FF") }
+            );
+            pulseBg.setCornerRadius(dp(2));
+            pulseBar.setBackground(pulseBg);
+            pulseBar.setVisibility(aiTaskRunning ? View.VISIBLE : View.GONE);
 
-            // [Stop] button (stops any running autonomous action or movement immediately)
+            aiPanelPulseAnimator = ObjectAnimator.ofPropertyValuesHolder(
+                statusDot,
+                PropertyValuesHolder.ofFloat(View.SCALE_X, 0.85f, 1.25f),
+                PropertyValuesHolder.ofFloat(View.SCALE_Y, 0.85f, 1.25f),
+                PropertyValuesHolder.ofFloat(View.ALPHA, 0.55f, 1.0f)
+            );
+            aiPanelPulseAnimator.setDuration(750L);
+            aiPanelPulseAnimator.setRepeatCount(ValueAnimator.INFINITE);
+            aiPanelPulseAnimator.setRepeatMode(ValueAnimator.REVERSE);
+            if (aiTaskRunning) {
+                aiPanelPulseAnimator.start();
+            }
+
+            final TextView replyTv = new TextView(this);
+            final ScrollView replyScroll = new ScrollView(this);
+
+            // [Stop] button
             Button stopBtn = new Button(this);
             stopBtn.setText("Stop");
             stopBtn.setAllCaps(false);
-            stopBtn.setTextColor(Color.parseColor("#F4F4F5"));
+            stopBtn.setTextColor(Color.parseColor("#FFB4AB"));
             stopBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
             stopBtn.setPadding(dp(8), 0, dp(8), 0);
             GradientDrawable stopBg = new GradientDrawable();
-            stopBg.setColor(Color.parseColor("#FF1C1C20"));
-            stopBg.setCornerRadius(dp(6));
-            stopBg.setStroke(dp(1), Color.parseColor("#FF3F3F46"));
+            stopBg.setColor(Color.parseColor("#FF251618"));
+            stopBg.setCornerRadius(dp(8));
+            stopBg.setStroke(dp(1), Color.parseColor("#66FF8A80"));
             stopBtn.setBackground(stopBg);
+            attachPressScaleAnimation(stopBtn);
             stopBtn.setOnClickListener(v -> {
                 aiTaskAbortRequested = true;
                 aiTaskRunning = false;
-                titleTv.setText("AI AGENT  •  " + formatModelDisplayName(modelId));
+                updateFloatingDotState();
+                pulseBar.setVisibility(View.GONE);
+                if (aiPanelPulseAnimator != null) aiPanelPulseAnimator.cancel();
+                statusDotBg.setColor(Color.parseColor("#81C784"));
+                titleTv.setText("HORIZONZ AI  •  " + formatModelDisplayName(modelId));
                 new Thread(() -> {
                     sendControlCommandToGame(homeDir, "sneak false");
                     sendControlCommandToGame(homeDir, "sprint false");
@@ -471,98 +590,195 @@ public final class HorizonActivity extends NativeActivity {
             Button clearBtn = new Button(this);
             clearBtn.setText("Clear");
             clearBtn.setAllCaps(false);
-            clearBtn.setTextColor(Color.parseColor("#A1A1AA"));
+            clearBtn.setTextColor(Color.parseColor("#B8C4CE"));
             clearBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
             clearBtn.setPadding(dp(8), 0, dp(8), 0);
             GradientDrawable clearBg = new GradientDrawable();
-            clearBg.setColor(Color.parseColor("#FF16161A"));
-            clearBg.setCornerRadius(dp(6));
-            clearBg.setStroke(dp(1), Color.parseColor("#FF27272A"));
+            clearBg.setColor(Color.parseColor("#FF182028"));
+            clearBg.setCornerRadius(dp(8));
+            clearBg.setStroke(dp(1), Color.parseColor("#FF2B3642"));
             clearBtn.setBackground(clearBg);
+            attachPressScaleAnimation(clearBtn);
             clearBtn.setOnClickListener(v -> {
-                lastAiReplyText = "Ready.";
+                lastAiReplyText = "Ready. Select a quick action or enter any instruction below.";
                 replyTv.setText(lastAiReplyText);
             });
             LinearLayout.LayoutParams clearLp = new LinearLayout.LayoutParams(dp(52), dp(26));
             clearLp.rightMargin = dp(6);
             header.addView(clearBtn, clearLp);
 
-            // [✕] Close button
+            // [✕] Close button with smooth exit animation
             Button closeBtn = new Button(this);
             closeBtn.setText("✕");
             closeBtn.setAllCaps(false);
-            closeBtn.setTextColor(Color.parseColor("#F4F4F5"));
+            closeBtn.setTextColor(Color.parseColor("#F4F6F8"));
             closeBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f);
             closeBtn.setPadding(0, 0, 0, 0);
             GradientDrawable closeBg = new GradientDrawable();
-            closeBg.setColor(Color.parseColor("#FF1C1C20"));
-            closeBg.setCornerRadius(dp(6));
-            closeBg.setStroke(dp(1), Color.parseColor("#FF2E2E34"));
+            closeBg.setColor(Color.parseColor("#FF1C242E"));
+            closeBg.setCornerRadius(dp(8));
+            closeBg.setStroke(dp(1), Color.parseColor("#FF334152"));
             closeBtn.setBackground(closeBg);
+            attachPressScaleAnimation(closeBtn);
             closeBtn.setOnClickListener(v -> {
-                aiCommandPanelDialog.dismiss();
-                enableImmersiveFullscreen();
+                if (aiPanelPulseAnimator != null) {
+                    aiPanelPulseAnimator.cancel();
+                }
+                root.animate()
+                    .alpha(0f)
+                    .scaleX(0.91f)
+                    .scaleY(0.91f)
+                    .translationY(-dp(12))
+                    .setDuration(150L)
+                    .setInterpolator(new AccelerateInterpolator())
+                    .setListener(new AnimatorListenerAdapter() {
+                        @Override
+                        public void onAnimationEnd(Animator animation) {
+                            if (aiCommandPanelDialog != null && aiCommandPanelDialog.isShowing()) {
+                                aiCommandPanelDialog.dismiss();
+                            }
+                            enableImmersiveFullscreen();
+                        }
+                    })
+                    .start();
             });
             header.addView(closeBtn, new LinearLayout.LayoutParams(dp(28), dp(26)));
             root.addView(header);
 
-            // Monochrome Output / Execution Log Box
-            replyTv.setText(lastAiReplyText);
-            replyTv.setTextColor(Color.parseColor("#E4E4E7"));
-            replyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
-            replyTv.setPadding(dp(10), dp(8), dp(10), dp(8));
-            GradientDrawable replyBg = new GradientDrawable();
-            replyBg.setColor(Color.parseColor("#FF121215"));
-            replyBg.setCornerRadius(dp(8));
-            replyBg.setStroke(dp(1), Color.parseColor("#FF232329"));
-            replyTv.setBackground(replyBg);
+            LinearLayout.LayoutParams pulseLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(2)
+            );
+            pulseLp.topMargin = dp(6);
+            root.addView(pulseBar, pulseLp);
 
-            ScrollView replyScroll = new ScrollView(this);
+            // Quick-Action Chips Row (1-tap actions with tactile scale animation)
+            HorizontalScrollView chipsScroll = new HorizontalScrollView(this);
+            chipsScroll.setHorizontalScrollBarEnabled(false);
+            LinearLayout chipsRow = new LinearLayout(this);
+            chipsRow.setOrientation(LinearLayout.HORIZONTAL);
+            chipsRow.setGravity(Gravity.CENTER_VERTICAL);
+
+            final String[][] quickActions = new String[][] {
+                { "⚡ Status & Pos", "Check my current coordinates, health, hunger, and inventory summary, and report briefly." },
+                { "🏠 Build Shelter", "Build a protective shelter around my current coordinates with a torch inside." },
+                { "⛏️ Mine Wood", "Find the nearest log block, walk to it, and mine it." },
+                { "☀️ Day & Clear", "/time set day" }
+            };
+
+            for (final String[] qa : quickActions) {
+                TextView chip = new TextView(this);
+                chip.setText(qa[0]);
+                chip.setTextColor(Color.parseColor("#D5E6F5"));
+                chip.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f);
+                chip.getPaint().setFakeBoldText(true);
+                chip.setPadding(dp(10), dp(5), dp(10), dp(5));
+                GradientDrawable chipBg = new GradientDrawable();
+                chipBg.setColor(Color.parseColor("#FF161E27"));
+                chipBg.setCornerRadius(dp(12));
+                chipBg.setStroke(dp(1), Color.parseColor("#388BE0FF"));
+                chip.setBackground(chipBg);
+                attachPressScaleAnimation(chip);
+                chip.setOnClickListener(v -> {
+                    String cmdOrPrompt = qa[1];
+                    if (cmdOrPrompt.startsWith("/")) {
+                        final String mcCmd = cmdOrPrompt.substring(1).trim();
+                        replyTv.setText("> command " + mcCmd);
+                        new Thread(() -> {
+                            String r1 = sendControlCommandToGame(homeDir, "command " + mcCmd);
+                            String r2 = sendControlCommandToGame(homeDir, "command weather clear");
+                            final String out = "> /" + mcCmd + " & /weather clear\n" + (r1 != null && !r1.isEmpty() ? r1 : "Executed.");
+                            lastAiReplyText = out;
+                            runOnUiThread(() -> {
+                                replyTv.setText(out);
+                                replyScroll.post(() -> replyScroll.fullScroll(View.FOCUS_DOWN));
+                            });
+                        }).start();
+                    } else {
+                        String key = readLocalGeminiKey(homeDir);
+                        if (key.isEmpty()) {
+                            replyTv.setText("Google AI Studio API Key is not set. Add your API Key in Launcher Settings > AI Agent.");
+                            return;
+                        }
+                        statusDotBg.setColor(Color.parseColor("#8BE0FF"));
+                        pulseBar.setVisibility(View.VISIBLE);
+                        if (aiPanelPulseAnimator != null && !aiPanelPulseAnimator.isStarted()) {
+                            aiPanelPulseAnimator.start();
+                        }
+                        titleTv.setText("HORIZONZ AI  •  " + formatModelDisplayName(modelId) + "  [ACTIVE]");
+                        replyTv.setText("Thinking & executing '" + qa[0] + "' with " + formatModelDisplayName(modelId) + "...");
+                        executeGeminiPromptInBackground(homeDir, key, modelId, taskPrompt, cmdOrPrompt, autonomousActions, replyTv, titleTv, replyScroll, pulseBar, statusDotBg);
+                    }
+                });
+                LinearLayout.LayoutParams chipLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                );
+                chipLp.rightMargin = dp(6);
+                chipsRow.addView(chip, chipLp);
+            }
+            chipsScroll.addView(chipsRow);
+            LinearLayout.LayoutParams chipsScrollLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            );
+            chipsScrollLp.topMargin = dp(8);
+            root.addView(chipsScroll, chipsScrollLp);
+
+            // Output / Execution Log Box
+            replyTv.setText(lastAiReplyText);
+            replyTv.setTextColor(Color.parseColor("#E4EBF2"));
+            replyTv.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
+            replyTv.setLineSpacing(dp(2), 1.0f);
+            replyTv.setPadding(dp(11), dp(9), dp(11), dp(9));
+
+            GradientDrawable replyBg = new GradientDrawable();
+            replyBg.setColor(Color.parseColor("#FF0E1319"));
+            replyBg.setCornerRadius(dp(10));
+            replyBg.setStroke(dp(1), Color.parseColor("#FF222D3A"));
+            replyScroll.setBackground(replyBg);
             replyScroll.addView(replyTv);
             LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(96)
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(98)
             );
             scrollLp.topMargin = dp(8);
             scrollLp.bottomMargin = dp(8);
             root.addView(replyScroll, scrollLp);
 
-            // Monochrome Prompt Input & [Run] Button Row
+            // Prompt Input & [Run] Button Row
             LinearLayout inputRow = new LinearLayout(this);
             inputRow.setOrientation(LinearLayout.HORIZONTAL);
             inputRow.setGravity(Gravity.CENTER_VERTICAL);
 
             final EditText promptInput = new EditText(this);
-            promptInput.setHint("Instruct AI or enter command (e.g. build shelter, mine oak_log, give diamond, gamemode creative)...");
-            promptInput.setHintTextColor(Color.parseColor("#71717A"));
-            promptInput.setTextColor(Color.parseColor("#F4F4F5"));
+            promptInput.setHint("Ask AI or type /command (e.g. build house, mine oak_log, /gamemode creative)...");
+            promptInput.setHintTextColor(Color.parseColor("#6E7D8C"));
+            promptInput.setTextColor(Color.parseColor("#F4F6F8"));
             promptInput.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             promptInput.setInputType(InputType.TYPE_CLASS_TEXT);
-            promptInput.setPadding(dp(10), dp(7), dp(10), dp(7));
+            promptInput.setPadding(dp(11), dp(7), dp(11), dp(7));
             GradientDrawable inputBg = new GradientDrawable();
-            inputBg.setColor(Color.parseColor("#FF16161A"));
-            inputBg.setCornerRadius(dp(8));
-            inputBg.setStroke(dp(1), Color.parseColor("#FF2E2E34"));
+            inputBg.setColor(Color.parseColor("#FF141B23"));
+            inputBg.setCornerRadius(dp(10));
+            inputBg.setStroke(dp(1), Color.parseColor("#FF2B3846"));
             promptInput.setBackground(inputBg);
             LinearLayout.LayoutParams inLp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
             inLp.rightMargin = dp(8);
             inputRow.addView(promptInput, inLp);
 
             Button sendBtn = new Button(this);
-            sendBtn.setText("Run");
+            sendBtn.setText("Run ✦");
             sendBtn.setAllCaps(false);
-            sendBtn.setTextColor(Color.parseColor("#09090B"));
+            sendBtn.setTextColor(Color.parseColor("#071824"));
             sendBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f);
             sendBtn.getPaint().setFakeBoldText(true);
             GradientDrawable sendBg = new GradientDrawable();
-            sendBg.setColor(Color.parseColor("#F4F4F5"));
-            sendBg.setCornerRadius(dp(8));
+            sendBg.setColor(Color.parseColor("#8BE0FF"));
+            sendBg.setCornerRadius(dp(10));
             sendBtn.setBackground(sendBg);
+            attachPressScaleAnimation(sendBtn);
             sendBtn.setOnClickListener(v -> {
                 String q = promptInput.getText().toString().trim();
                 if (q.isEmpty()) return;
                 promptInput.setText("");
 
-                // Support direct raw horizon-ctl or slash commands immediately even without API call
                 if (q.startsWith("/")) {
                     final String mcCmd = q.substring(1).trim();
                     replyTv.setText("> command " + mcCmd);
@@ -570,7 +786,10 @@ public final class HorizonActivity extends NativeActivity {
                         String res = sendControlCommandToGame(homeDir, "command " + mcCmd);
                         final String out = "> /" + mcCmd + "\n" + (res != null && !res.isEmpty() ? res : "Executed.");
                         lastAiReplyText = out;
-                        runOnUiThread(() -> replyTv.setText(out));
+                        runOnUiThread(() -> {
+                            replyTv.setText(out);
+                            replyScroll.post(() -> replyScroll.fullScroll(View.FOCUS_DOWN));
+                        });
                     }).start();
                     return;
                 }
@@ -580,25 +799,43 @@ public final class HorizonActivity extends NativeActivity {
                     replyTv.setText("Google AI Studio API Key is not set. Add your API Key in Launcher Settings > AI Agent (or type /<command> for direct execution).");
                     return;
                 }
-                titleTv.setText("AI AGENT  •  " + formatModelDisplayName(modelId) + "  [RUNNING]");
+                statusDotBg.setColor(Color.parseColor("#8BE0FF"));
+                pulseBar.setVisibility(View.VISIBLE);
+                if (aiPanelPulseAnimator != null && !aiPanelPulseAnimator.isStarted()) {
+                    aiPanelPulseAnimator.start();
+                }
+                titleTv.setText("HORIZONZ AI  •  " + formatModelDisplayName(modelId) + "  [ACTIVE]");
                 replyTv.setText("Planning & executing with " + formatModelDisplayName(modelId) + "...");
-                executeGeminiPromptInBackground(homeDir, key, modelId, taskPrompt, q, autonomousActions, replyTv, titleTv);
+                executeGeminiPromptInBackground(homeDir, key, modelId, taskPrompt, q, autonomousActions, replyTv, titleTv, replyScroll, pulseBar, statusDotBg);
             });
-            inputRow.addView(sendBtn, new LinearLayout.LayoutParams(dp(68), dp(34)));
+            inputRow.addView(sendBtn, new LinearLayout.LayoutParams(dp(72), dp(35)));
             root.addView(inputRow);
+
+            root.setAlpha(0f);
+            root.setScaleX(0.88f);
+            root.setScaleY(0.88f);
+            root.setTranslationY(-dp(16));
 
             aiCommandPanelDialog.setContentView(root);
             Window win = aiCommandPanelDialog.getWindow();
             if (win != null) {
                 win.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 WindowManager.LayoutParams lp = win.getAttributes();
-                lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.76f);
+                lp.width = (int) (getResources().getDisplayMetrics().widthPixels * 0.78f);
                 lp.height = WindowManager.LayoutParams.WRAP_CONTENT;
                 lp.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
-                lp.y = dp(18);
+                lp.y = dp(16);
                 win.setAttributes(lp);
             }
             aiCommandPanelDialog.show();
+            root.animate()
+                .alpha(1f)
+                .scaleX(1f)
+                .scaleY(1f)
+                .translationY(0f)
+                .setDuration(240L)
+                .setInterpolator(new OvershootInterpolator(1.12f))
+                .start();
         } catch (Exception e) {
             Log.w(TAG, "Failed to show in-game AI command panel: " + e.getMessage());
         }
@@ -614,9 +851,26 @@ public final class HorizonActivity extends NativeActivity {
         final TextView targetReplyView,
         final TextView targetTitleView
     ) {
+        executeGeminiPromptInBackground(homeDir, apiKey, modelId, taskPrompt, userPrompt, autonomousActions, targetReplyView, targetTitleView, null, null, null);
+    }
+
+    private void executeGeminiPromptInBackground(
+        final File homeDir,
+        final String apiKey,
+        final String modelId,
+        final String taskPrompt,
+        final String userPrompt,
+        final boolean autonomousActions,
+        final TextView targetReplyView,
+        final TextView targetTitleView,
+        final ScrollView targetScrollView,
+        final View targetPulseBar,
+        final GradientDrawable targetStatusDotBg
+    ) {
         new Thread(() -> {
             aiTaskAbortRequested = false;
             aiTaskRunning = true;
+            updateFloatingDotState();
             try {
                 String stateJson = sendControlCommandToGame(homeDir, "state");
                 String invJson = sendControlCommandToGame(homeDir, "inventory");
@@ -637,7 +891,12 @@ public final class HorizonActivity extends NativeActivity {
                     String formatted = dispatchGeminiAgentResponse(homeDir, geminiReply, autonomousActions, targetReplyView);
                     lastAiReplyText = formatted;
                     if (targetReplyView != null) {
-                        runOnUiThread(() -> targetReplyView.setText(formatted));
+                        runOnUiThread(() -> {
+                            targetReplyView.setText(formatted);
+                            if (targetScrollView != null) {
+                                targetScrollView.post(() -> targetScrollView.fullScroll(View.FOCUS_DOWN));
+                            }
+                        });
                     }
                 } else {
                     String fallbackMsg = "No response from Gemini API (" + formatModelDisplayName(modelId) + "). Check internet connection and API Key.";
@@ -648,9 +907,21 @@ public final class HorizonActivity extends NativeActivity {
                 }
             } finally {
                 aiTaskRunning = false;
-                if (targetTitleView != null) {
-                    runOnUiThread(() -> targetTitleView.setText("AI AGENT  •  " + formatModelDisplayName(modelId)));
-                }
+                updateFloatingDotState();
+                runOnUiThread(() -> {
+                    if (targetTitleView != null) {
+                        targetTitleView.setText("HORIZONZ AI  •  " + formatModelDisplayName(modelId));
+                    }
+                    if (targetPulseBar != null) {
+                        targetPulseBar.setVisibility(View.GONE);
+                    }
+                    if (targetStatusDotBg != null) {
+                        targetStatusDotBg.setColor(Color.parseColor("#81C784"));
+                    }
+                    if (aiPanelPulseAnimator != null) {
+                        aiPanelPulseAnimator.cancel();
+                    }
+                });
             }
         }, "HorizonZ-GeminiRequestWorker").start();
     }
@@ -681,40 +952,43 @@ public final class HorizonActivity extends NativeActivity {
     }
 
     /**
-     * Connects to the game's `$HORIZON_CONTROL` endpoint (`horizon-control.json`) using Horizon's
-     * exact TCP JSON-file transport (`{"transport":"tcp","port":N,"token":"..."}`):
-     * 1. Sends `auth <TOKEN>\n` as the first line.
-     * 2. Sends the CLI command line (`state\n`, `inventory\n`, `looking-at\n`, `chat ...\n`, `command ...\n`, `goto ...\n`, etc.).
-     * 3. Reads and returns the JSON response line from the game.
+     * Connects to the game's `$HORIZON_CONTROL` endpoint (`horizon-control.json`) using cached
+     * endpoint metadata so repeated commands do not re-parse `horizon-control.json` from disk.
      */
     private String sendControlCommandToGame(File homeDir, String commandLine) {
         try {
             File ctrlFile = new File(homeDir, "horizon-control.json");
             if (!ctrlFile.exists()) return null;
-            String ctrlRaw = readSmallTextFile(ctrlFile);
-            if (ctrlRaw.isEmpty()) return null;
-            JSONObject ctrlObj = new JSONObject(ctrlRaw);
-            String host = "127.0.0.1";
-            int port = ctrlObj.optInt("port", 0);
-            if (port <= 0) {
-                String addr = ctrlObj.optString("address", ctrlObj.optString("addr", ""));
-                int colon = addr.lastIndexOf(':');
-                if (colon > 0) {
-                    host = addr.substring(0, colon).trim();
-                    port = Integer.parseInt(addr.substring(colon + 1).trim());
+            long mtime = ctrlFile.lastModified();
+            if (mtime != cachedControlMtime || cachedControlPort <= 0) {
+                String ctrlRaw = readSmallTextFile(ctrlFile);
+                if (ctrlRaw.isEmpty()) return null;
+                JSONObject ctrlObj = new JSONObject(ctrlRaw);
+                String host = "127.0.0.1";
+                int port = ctrlObj.optInt("port", 0);
+                if (port <= 0) {
+                    String addr = ctrlObj.optString("address", ctrlObj.optString("addr", ""));
+                    int colon = addr.lastIndexOf(':');
+                    if (colon > 0) {
+                        host = addr.substring(0, colon).trim();
+                        port = Integer.parseInt(addr.substring(colon + 1).trim());
+                    }
                 }
+                if (port <= 0) return null;
+                cachedControlHost = host;
+                cachedControlPort = port;
+                cachedControlToken = ctrlObj.optString("token", "").trim();
+                cachedControlMtime = mtime;
             }
-            if (port <= 0) return null;
-            String token = ctrlObj.optString("token", "").trim();
 
             try (Socket sock = new Socket()) {
-                sock.connect(new InetSocketAddress(host, port), 1500);
-                sock.setSoTimeout(3500);
+                sock.connect(new InetSocketAddress(cachedControlHost, cachedControlPort), 1200);
+                sock.setSoTimeout(3000);
                 BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(sock.getOutputStream(), StandardCharsets.UTF_8));
                 BufferedReader reader = new BufferedReader(new InputStreamReader(sock.getInputStream(), StandardCharsets.UTF_8));
 
-                if (!token.isEmpty()) {
-                    writer.write("auth " + token + "\n");
+                if (!cachedControlToken.isEmpty()) {
+                    writer.write("auth " + cachedControlToken + "\n");
                     writer.flush();
                 }
                 writer.write(commandLine.replace("\n", " ").trim() + "\n");
@@ -757,7 +1031,22 @@ public final class HorizonActivity extends NativeActivity {
         }
         if (logFile.exists()) {
             try {
-                String tail = readSmallTextFile(logFile);
+                long mtime = logFile.lastModified();
+                long fsize = logFile.length();
+                if (mtime == lastLogCheckedMtime && fsize == lastLogCheckedSize) {
+                    return null;
+                }
+                lastLogCheckedMtime = mtime;
+                lastLogCheckedSize = fsize;
+                byte[] tailBytes;
+                try (RandomAccessFile raf = new RandomAccessFile(logFile, "r")) {
+                    long start = Math.max(0L, fsize - 4096L);
+                    raf.seek(start);
+                    int toRead = (int) (fsize - start);
+                    tailBytes = new byte[toRead];
+                    raf.readFully(tailBytes);
+                }
+                String tail = new String(tailBytes, StandardCharsets.UTF_8);
                 String[] lines = tail.split("\n");
                 for (int i = lines.length - 1; i >= Math.max(0, lines.length - 25); i--) {
                     String l = lines[i].trim();
@@ -1090,7 +1379,7 @@ public final class HorizonActivity extends NativeActivity {
             File homeDir = getFilesDir();
             if (homeDir == null) return;
             if (!homeDir.exists()) homeDir.mkdirs();
-            final String expectedStamp = "2.5-0.7.7-150a414";
+            final String expectedStamp = "2.6-0.7.7-150a414";
             File stampFile = new File(homeDir, "engine-data-version.txt");
             String currentStamp = stampFile.exists() ? readSmallTextFile(stampFile) : "";
             File engineZip = new File(homeDir, "engine-data.zip");
