@@ -2809,6 +2809,7 @@ private fun CleanAccountsAndSkinsViewport(
     onAccountsChange: (List<ZalithAccount>) -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     var selectedSubTab by remember { mutableStateOf(AccountSubCategory.SKIN_STUDIO) }
     var is3DPreview by remember { mutableStateOf(true) }
     var autoRotate3D by remember { mutableStateOf(true) }

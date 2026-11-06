@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 2.6 APK (${{ matrix.abi }})
+    name: Build HorizonZ 2.7 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 2.6 Patches
+      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 2.7 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           UPSTREAM_TARGET_COMMIT="150a414b09a18c900489d9462a7fc035dae744b7"
@@ -161,7 +161,7 @@ jobs:
       - name: Cache Rust Engine Build
         uses: Swatinem/rust-cache@v2
         with:
-          key: horizon-real-engine-v26-150a414-${{ matrix.rust_target }}
+          key: horizon-real-engine-v27-150a414-${{ matrix.rust_target }}
 
       - name: Compile Real Horizon Rust Engine (libhorizon_android.so) & Prestage Controls (${{ matrix.abi }})
         run: |
@@ -186,7 +186,7 @@ jobs:
           TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export HORIZON_ANDROID_PUBLIC=1
-          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz26')"
+          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz27')"
           export HORIZON_ANDROID_BUILD_DIRTY="false"
           export CARGO_PROFILE_RELEASE_LTO=false
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -236,18 +236,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.6-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-2.7-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-2.6-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-2.6-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-2.7-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-2.7-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 2.6 Release APKs
+    name: Publish HorizonZ 2.7 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -267,14 +267,13 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v2.6.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v2.6 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v2.7.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v2.7 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            ## HorizonZ Launcher v2.6 (`2.6.0-HorizonZ`, versionCode 67)
-            ### What's New
-            - **Liquid Glass removal and launcher UI updates:** Removes `LiquidGlassBackdrop.kt` and the `LIQUID_GLASS` palette, replaces the sidebar with a Compose navigation rail, debounces configuration saves by 180 ms, saves configuration on activity stop, and caches SHA-256 skin digests.
-            - **Two-way launcher/game settings synchronization:** Synchronizes `options.txt` (including `fov` and `gamma`), `horizon-extras.txt`, `horizon-mods.txt`, `hmod_list.json`, `horizon-shaders.txt`, `horizon-keypad.json`, `horizon-touch.txt`, `horizon-controller.txt`, `horizon-memory.txt`, and `horizon-appearance.json` across `home`, `profileHome`, and `.local/horizon-client/26.3`; reads game-side changes back on launcher resume.
-            - **Animated in-game AI popup:** Adds spring-style entrance/exit animation, a pulsing status indicator, Quick Action buttons, cached local control-socket metadata, and tail-only game-log polling with `RandomAccessFile`.
+            ## HorizonZ - Launcher v2.7 (Android Fork of `Vasysik/horizon-android` `150a414` & `horizon-rust/horizon` 26.3)
+            - Fixed the unresolved `scope` reference in `CleanAccountsAndSkinsViewport` by declaring `val scope = rememberCoroutineScope()` for the Ely.by authentication flow.
+            - **Retained v2.6 Optimizations & Features**: Retains complete removal of `LiquidGlassBackdrop.kt` / `LIQUID_GLASS` shader overhead, 180ms debounced config persistence, cached SHA-256 skin digests, full two-way synchronization between Launcher settings and `.local/horizon-client/26.3`, and the animated in-game `✦ AI` HUD pill and popup with 1-tap Quick Action chips.
+            - **Retained v2.5 / v2.3 Upstream Integration (`150a414`)**: Retains `"user_type": "ely"` in `prepareReadOnceSessionFile`, `config.touchScheme.serdeKey`, `schema: 1` `horizon-appearance.json` and `wardrobe/wardrobe.json` staging, and pinned upstream commit `150a414b09a18c900489d9462a7fc035dae744b7`.
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt
