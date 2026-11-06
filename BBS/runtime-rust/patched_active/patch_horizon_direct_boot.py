@@ -68,7 +68,7 @@ def ensure_upstream_include_assets():
             fetched = False
             for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.9"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.0"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read()
                     if data:
@@ -112,13 +112,13 @@ if pages_rs.exists():
     ptxt = pages_rs.read_text(encoding="utf-8")
     old_draw_fn = "pub(super) fn draw_pages(&mut self) -> Result<()> {"
     new_draw_fn = '''pub(super) fn draw_pages(&mut self) -> Result<()> {
-        if std::env::var_os("HORIZON_SHOW_INTERNAL_UI").is_none() {
+        if std::env::var_os("HORIZON_SHOW_INTERNAL_UI").is_none() && self.error.is_none() && self.worker.is_none() {
             return Ok(());
         }'''
     if old_draw_fn in ptxt and "HORIZON_SHOW_INTERNAL_UI" not in ptxt:
         ptxt = ptxt.replace(old_draw_fn, new_draw_fn, 1)
         pages_rs.write_text(ptxt, encoding="utf-8")
-        print("[HorizonZ Patch] Patched launcher_pages.rs draw_pages() to return Ok(()) immediately!")
+        print("[HorizonZ Patch] Patched launcher_pages.rs draw_pages() to bypass idle launcher UI while preserving worker/error visibility!")
 
 # ==============================================================================
 # 2. Patch crates/horizon-client/src/android/launcher.rs:
@@ -164,26 +164,90 @@ fn sanitize_and_repair_horizon_mods(home: &std::path::Path) {
     }
 }
 
+static GAME_HAS_EXITED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static BOOT_READY_SIGNALED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn sync_dir_contents_non_destructive(src_dir: &std::path::Path, dst_dir: &std::path::Path) {
+    if !src_dir.is_dir() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(dst_dir);
+    let Ok(entries) = std::fs::read_dir(src_dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name() else { continue };
+        let dst_path = dst_dir.join(name);
+        if path.is_dir() {
+            sync_dir_contents_non_destructive(&path, &dst_path);
+        } else if path.is_file() {
+            let should_copy = match (path.metadata(), dst_path.metadata()) {
+                (Ok(sm), Ok(dm)) => sm.len() != dm.len() || sm.modified().ok() > dm.modified().ok(),
+                (Ok(_), Err(_)) => true,
+                _ => false,
+            };
+            if should_copy {
+                let _ = std::fs::copy(&path, &dst_path);
+            }
+        }
+    }
+}
+
 fn sync_horizonz_runtime_files(home: &std::path::Path) {
     let engine_dir = home.join(".local/horizon-client").join(horizon_core::VANILLA_VERSION);
     let _ = std::fs::create_dir_all(&engine_dir);
     for fname in [
         "options.txt",
+        "options_horizon.txt",
         "horizon-extras.txt",
         "horizon-mods.txt",
+        "hmods.txt",
         "hmod_list.json",
         "horizon-shaders.txt",
+        "horizon-resourcepacks.txt",
         "horizon-keypad.json",
         "horizon-touch.txt",
         "horizon-controller.txt",
         "horizon-memory.txt",
         "horizon-appearance.json",
+        "android-launcher.json",
+        "accounts.json",
     ] {
         let src = home.join(fname);
         let dst = engine_dir.join(fname);
         if src.is_file() {
             let _ = std::fs::copy(&src, &dst);
         }
+    }
+    for dname in ["horizon-mods", "mods", "shaderpacks", "resourcepacks", "saves", "screenshots", "horizon-packs"] {
+        sync_dir_contents_non_destructive(&home.join(dname), &engine_dir.join(dname));
+        sync_dir_contents_non_destructive(&engine_dir.join(dname), &home.join(dname));
+    }
+}
+
+fn sync_horizonz_engine_back_to_home(home: &std::path::Path) {
+    let engine_dir = home.join(".local/horizon-client").join(horizon_core::VANILLA_VERSION);
+    if !engine_dir.is_dir() {
+        return;
+    }
+    for fname in [
+        "options.txt",
+        "options_horizon.txt",
+        "horizon-extras.txt",
+        "horizon-mods.txt",
+        "hmods.txt",
+        "hmod_list.json",
+        "horizon-shaders.txt",
+    ] {
+        let src = engine_dir.join(fname);
+        let dst = home.join(fname);
+        if src.is_file() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+    for dname in ["horizon-mods", "shaderpacks", "resourcepacks", "saves", "screenshots"] {
+        sync_dir_contents_non_destructive(&engine_dir.join(dname), &home.join(dname));
     }
 }
 
@@ -315,7 +379,7 @@ pub(super) struct Launcher {'''
         txt = txt.replace(old_struct, new_struct, 1)
         print("[HorizonZ Patch] Inserted GAME_LAUNCHED_ONCE & apply_horizonz_custom_skin above struct Launcher!")
 
-    # (a) Patch `restore_launcher` tail FIRST so quitting Minecraft exits cleanly instead of reopening!
+    # (a) Patch `restore_launcher` tail FIRST so quitting Minecraft syncs in-game changes, writes zalith-game-exited.flag, and exits cleanly!
     old_restore_tail = '''        if let Ok(message) = std::fs::read_to_string(self.home.join("android-error.txt")) {
             self.error = Some(message);
         }
@@ -323,16 +387,18 @@ pub(super) struct Launcher {'''
             self.fail(error);
             events.exit();
         }'''
-    new_restore_tail = '''        if let Ok(message) = std::fs::read_to_string(self.home.join("android-error.txt")) {
+    new_restore_tail = '''        GAME_HAS_EXITED.store(true, std::sync::atomic::Ordering::SeqCst);
+        sync_horizonz_engine_back_to_home(&self.home);
+        if let Ok(message) = std::fs::read_to_string(self.home.join("android-error.txt")) {
             self.error = Some(message);
         }
         let _ = std::fs::write(self.home.join("zalith-game-exited.flag"), "1");
         events.exit();'''
     if old_restore_tail in txt:
         txt = txt.replace(old_restore_tail, new_restore_tail, 1)
-        print("[HorizonZ Patch] Patched restore_launcher tail to write zalith-game-exited.flag and exit cleanly!")
+        print("[HorizonZ Patch] Patched restore_launcher tail to sync in-game files, write zalith-game-exited.flag, and exit cleanly!")
 
-    # (b) Brace-balanced patch of `fn resumed(&mut self, events: &ActiveEventLoop)` (100% compatible with v0.7.5+)
+    # (b) Brace-balanced patch of `fn resumed(&mut self, events: &ActiveEventLoop)` (never exits prematurely on surface/orientation recreation!)
     sig = "fn resumed(&mut self, events: &ActiveEventLoop) {"
     if sig in txt and "45|Creating Vulkan / WGPU Surface..." not in txt:
         start_idx = txt.index(sig)
@@ -357,14 +423,14 @@ pub(super) struct Launcher {'''
             + "            let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"100|Main Menu Ready\");\n"
             + "            return game.resumed(events);\n"
             + "        }\n"
-            + "        if GAME_LAUNCHED_ONCE.load(std::sync::atomic::Ordering::SeqCst) {\n"
+            + "        if GAME_HAS_EXITED.load(std::sync::atomic::Ordering::SeqCst) {\n"
             + "            let _ = std::fs::write(self.home.join(\"zalith-game-exited.flag\"), \"1\");\n"
             + "            events.exit();\n"
             + "            return;\n"
             + "        }\n"
             + "        let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"38|Verifying Horizon Mods & Profile Catalog...\");\n"
             + "        apply_horizonz_ram_allocation(&self.home);\n"
-        + "        apply_horizonz_shader_and_agent_config(&self.home);\n"
+            + "        apply_horizonz_shader_and_agent_config(&self.home);\n"
             + "        sanitize_and_repair_horizon_mods(&self.home);\n"
             + "        self.catalog.refresh(&self.home);\n"
             + "        let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"55|Creating Vulkan / WGPU Surface...\");\n"
@@ -379,32 +445,39 @@ pub(super) struct Launcher {'''
             + "                apply_horizonz_custom_skin(&self.home);\n"
             + "                if let Err(error) = self.action(events) {\n"
             + "                    self.fail(error);\n"
-            + "                } else {\n"
+            + "                } else if self.game.is_some() {\n"
+            + "                    BOOT_READY_SIGNALED.store(true, std::sync::atomic::Ordering::SeqCst);\n"
             + "                    let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"100|Main Menu Ready\");\n"
+            + "                } else {\n"
+            + "                    let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"85|Preparing Minecraft 26.3 Session & Assets...\");\n"
             + "                }\n"
             + "            }\n"
             + "        }\n"
             + "    }"
         )
         txt = txt[:start_idx] + new_resumed_fn + txt[end_idx:]
-        print("[HorizonZ Patch] Patched Launcher::resumed (brace-balanced v0.7.5+) with direct boot!")
+        print("[HorizonZ Patch] Patched Launcher::resumed (brace-balanced v0.7.5+) with safe surface recreation & direct boot!")
 
-    # (c) Auto-launch game when install worker finishes & signal 100|Main Menu Ready
+    # (c) Auto-launch game when install/session worker finishes & signal 100|Main Menu Ready when self.game.is_some()
     old_worker = '''        if let Some(result) = self.worker.as_ref().and_then(|w| w.try_recv().ok()) {
             self.worker = None;
             if let Err(error) = result {
                 self.fail(error);
             }
         }'''
-    new_worker = '''        if let Some(result) = self.worker.as_ref().and_then(|w| w.try_recv().ok()) {
+    new_worker = '''        if self.game.is_some() && !BOOT_READY_SIGNALED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            let _ = std::fs::write(self.home.join("zalith-game-boot.txt"), "100|Main Menu Ready");
+        }
+        if let Some(result) = self.worker.as_ref().and_then(|w| w.try_recv().ok()) {
             self.worker = None;
             match result {
                 Ok(()) => {
-                    let _ = std::fs::write(self.home.join("zalith-game-boot.txt"), "75|Starting Minecraft 26.3 Engine...");
+                    let _ = std::fs::write(self.home.join("zalith-game-boot.txt"), "88|Starting Minecraft 26.3 Engine...");
                     apply_horizonz_custom_skin(&self.home);
                     if let Err(error) = self.action(events) {
                         self.fail(error);
-                    } else {
+                    } else if self.game.is_some() {
+                        BOOT_READY_SIGNALED.store(true, std::sync::atomic::Ordering::SeqCst);
                         let _ = std::fs::write(self.home.join("zalith-game-boot.txt"), "100|Main Menu Ready");
                     }
                 }
@@ -704,7 +777,7 @@ def patch_ingame_ai_agent_and_native_mods():
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/2.9"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.0"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":
@@ -713,62 +786,6 @@ def patch_ingame_ai_agent_and_native_mods():
         except Exception as exc:
             print(f"[HorizonZ Patch] Notice fetching {fname}: {exc}")
 
-    # (b) Try applying official Horizon native mods (`zoom`, `fps_overlay`, `keystrokes`, `minimap`, `coords_hud`, `recipes`)
-    #     via `horizon-mixins` with safe backup & rollback if upstream hook signatures differ
-    backup_dir = Path("/tmp/horizon-client-pre-mixins-backup")
-    shutil.rmtree(backup_dir, ignore_errors=True)
-    shutil.copytree(Path("crates/horizon-client"), backup_dir)
-
-    try:
-        mods_repo = Path("/tmp/horizon-official-mods")
-        mixins_repo = Path("/tmp/horizon-mixins-tool")
-        shutil.rmtree(mods_repo, ignore_errors=True)
-        shutil.rmtree(mixins_repo, ignore_errors=True)
-        r1 = subprocess.run(
-            ["git", "clone", "--depth", "1", "https://github.com/horizon-rust/horizon-mods.git", str(mods_repo)],
-            capture_output=True, text=True, timeout=60
-        )
-        r2 = subprocess.run(
-            ["git", "clone", "--depth", "1", "https://github.com/horizon-rust/horizon-mixins.git", str(mixins_repo)],
-            capture_output=True, text=True, timeout=60
-        )
-        if r1.returncode == 0 and r2.returncode == 0 and (mods_repo / "native").is_dir():
-            build_mx = subprocess.run(
-                ["cargo", "build", "--release", "--manifest-path", str(mixins_repo / "Cargo.toml")],
-                capture_output=True, text=True, timeout=180
-            )
-            mx_bin = mixins_repo / "target/release/horizon-mixins"
-            if build_mx.returncode == 0 and mx_bin.is_file():
-                bundle_dirs = []
-                for mod_name in ["zoom", "fps_overlay", "keystrokes", "minimap", "coords_hud", "recipes"]:
-                    cand = mods_repo / "native" / mod_name
-                    if (cand / "horizon-mixin.toml").is_file():
-                        bundle_dirs.append(str(cand))
-                if bundle_dirs:
-                    stage_out = Path("/tmp/horizon-mixins-stage")
-                    shutil.rmtree(stage_out, ignore_errors=True)
-                    apply_cmd = [str(mx_bin), "apply", "--game", ".", "--out", str(stage_out)] + bundle_dirs
-                    ap = subprocess.run(apply_cmd, capture_output=True, text=True, timeout=60)
-                    if ap.returncode == 0 and (stage_out / "crates/horizon-client").is_dir():
-                        shutil.rmtree(Path("crates/horizon-client"))
-                        shutil.copytree(stage_out / "crates/horizon-client", Path("crates/horizon-client"))
-                        chk = subprocess.run(
-                            ["cargo", "check", "-p", "horizon-android"],
-                            capture_output=True, text=True, timeout=240
-                        )
-                        if chk.returncode == 0:
-                            print(f"[HorizonZ Patch] Successfully compiled {len(bundle_dirs)} official native mods into horizon-client!")
-                        else:
-                            print("[HorizonZ Patch] Notice: horizon-mixins stage had hook version diff; restoring clean horizon-client.")
-                            shutil.rmtree(Path("crates/horizon-client"))
-                            shutil.copytree(backup_dir, Path("crates/horizon-client"))
-    except Exception as exc:
-        print(f"[HorizonZ Patch] Notice during optional native-mods mixin stage: {exc}")
-        if backup_dir.is_dir():
-            shutil.rmtree(Path("crates/horizon-client"), ignore_errors=True)
-            shutil.copytree(backup_dir, Path("crates/horizon-client"))
-    finally:
-        shutil.rmtree(backup_dir, ignore_errors=True)
 
 patch_ingame_ai_agent_and_native_mods()
 

@@ -284,6 +284,7 @@ class ZalithMainActivity : ComponentActivity() {
                             isGameProcessSleeping = false
                             scope.launch(Dispatchers.IO) {
                                 val loadedCfg = HorizonNativeBridge.loadSavedConfig(context)
+                                HorizonNativeBridge.syncAllContentDirectoriesTwoWay(context, loadedCfg.profile)
                                 val loadedAcc = HorizonNativeBridge.loadSavedAccounts(context)
                                 withContext(Dispatchers.Main) {
                                     config = loadedCfg
@@ -380,24 +381,19 @@ class ZalithMainActivity : ComponentActivity() {
                                     val accSnapshot = activeAccount
                                     scope.launch {
                                         withContext(Dispatchers.IO) {
+                                            HorizonNativeBridge.syncAllContentDirectoriesTwoWay(context, cfgSnapshot.profile)
                                             HorizonNativeBridge.prepareNativeGameLaunch(context, cfgSnapshot, accSnapshot)
                                         }
-                                        delay(160L)
+                                        delay(140L)
                                         isLauncherHibernated = true
+                                        isGameProcessSleeping = true
                                         HorizonNativeBridge.startHorizonGameActivity(context, cfgSnapshot, accSnapshot)
-                                        // Allow :game (HorizonActivity) to take foreground window, then shut down the
-                                        // launcher process completely so 0 MB RAM and 0% CPU are used by the launcher!
-                                        delay(320L)
-                                        HorizonNativeBridge.releaseMemoryForGameLaunch(context)
-                                        runCatching {
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-                                                finishAndRemoveTask()
-                                            } else {
-                                                finish()
-                                            }
+                                        // Keep the task root alive in 0% CPU/GPU sleep mode while :game (HorizonActivity)
+                                        // initializes its native Vulkan/GLES surface so Android WindowManager never aborts the transition.
+                                        delay(450L)
+                                        withContext(Dispatchers.IO) {
+                                            HorizonNativeBridge.releaseMemoryForGameLaunch(context)
                                         }
-                                        delay(120L)
-                                        android.os.Process.killProcess(android.os.Process.myPid())
                                     }
                                 }
                             }
@@ -6231,6 +6227,7 @@ private fun CleanFilesViewport(
     onQuickPlayWorld: () -> Unit
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
     val home = remember(profileSlot) {
         HorizonNativeBridge.getProfileHome(HorizonNativeBridge.ensureHomeDirectories(context), profileSlot)
     }
@@ -6250,6 +6247,7 @@ private fun CleanFilesViewport(
 
     val categories = listOf(
         Triple("mods", "Mods", Icons.Default.Extension),
+        Triple("modpacks", "Modpacks", Icons.Default.Inventory2),
         Triple("saves", "Saves", Icons.Default.Public),
         Triple("resourcepacks", "Resource Packs", Icons.Default.Brush),
         Triple("shaderpacks", "Shader Packs", Icons.Default.Lightbulb),
@@ -6261,16 +6259,33 @@ private fun CleanFilesViewport(
 
     LaunchedEffect(currentFolder, refreshCount, profileSlot) {
         val loaded = withContext(Dispatchers.IO) {
-            if (currentFolder == "mods") {
-                HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
-                val hmodDir = File(home, "horizon-mods").apply { mkdirs() }
-                hmodDir.listFiles()
-                    ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".tmp") && it.name.endsWith(".hmod", true) }
-                    ?.distinctBy { HorizonNativeBridge.sanitizeModId(it.name) }
-                    .orEmpty()
-            } else {
-                val dirFile = File(home, currentFolder).apply { mkdirs() }
-                dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty()
+            HorizonNativeBridge.syncAllContentDirectoriesTwoWay(context, profileSlot)
+            when (currentFolder) {
+                "mods" -> {
+                    HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
+                    val hmodDir = File(home, "horizon-mods").apply { mkdirs() }
+                    hmodDir.listFiles()
+                        ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".tmp") && it.name.endsWith(".hmod", true) }
+                        ?.distinctBy { HorizonNativeBridge.sanitizeModId(it.name) }
+                        .orEmpty()
+                }
+                "shaderpacks" -> {
+                    HorizonNativeBridge.syncAndRepairShadersStorage(context, profileSlot)
+                    val shaderDir = File(home, "shaderpacks").apply { mkdirs() }
+                    shaderDir.listFiles()
+                        ?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }
+                        .orEmpty()
+                }
+                "modpacks" -> {
+                    val packDir = File(home, "horizon-packs").apply { mkdirs() }
+                    packDir.listFiles()
+                        ?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }
+                        .orEmpty()
+                }
+                else -> {
+                    val dirFile = File(home, currentFolder).apply { mkdirs() }
+                    dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty()
+                }
             }
         }
         rawList = loaded
@@ -6351,20 +6366,32 @@ private fun CleanFilesViewport(
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
-            val ext = when (currentFolder) {
+            val folderSnap = currentFolder
+            val ext = when (folderSnap) {
                 "mods" -> ".hmod"
+                "modpacks" -> ".hpack"
                 "shaderpacks" -> ".hshader"
                 "screenshots" -> ".png"
                 else -> ".zip"
             }
-            HorizonNativeBridge.importUriToDestination(
-                context,
-                uri,
-                currentFolder,
-                "imported_${System.currentTimeMillis()}$ext",
-                logEnabled
-            )
-            refreshCount += 1
+            scope.launch {
+                val ok = withContext(Dispatchers.IO) {
+                    HorizonNativeBridge.importUriToDestination(
+                        context,
+                        uri,
+                        folderSnap,
+                        "imported_${System.currentTimeMillis()}$ext",
+                        logEnabled,
+                        profileSlot
+                    )
+                }
+                refreshCount += 1
+                Toast.makeText(
+                    context,
+                    if (ok) "Berhasil mengimpor ke $folderSnap & menyinkronkan ke engine!" else "Gagal mengimpor file.",
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
         }
     }
 
@@ -6631,7 +6658,7 @@ private fun CleanFilesViewport(
                         modifier = Modifier.animatedPressScale {
                             val targetCat = when (currentFolder) {
                                 "mods" -> StoreCategory.MOD
-                                "saves" -> StoreCategory.MODPACK
+                                "modpacks", "saves" -> StoreCategory.MODPACK
                                 "resourcepacks" -> StoreCategory.RESOURCE_PACK
                                 "shaderpacks" -> StoreCategory.SHADER_PACK
                                 else -> StoreCategory.MOD
@@ -6683,6 +6710,7 @@ private fun CleanFilesViewport(
                     if (filteredList.isEmpty()) {
                         val emptyLabel = when (folder) {
                             "mods" -> "Belum ada mod terpasang untuk profil ini (Klik 'Store' untuk mengunduh dari playhorizon.dev/mods)"
+                            "modpacks" -> "Belum ada Modpack (.hpack) terpasang untuk profil ini (Klik 'Store' untuk mengunduh Modpack)"
                             "saves" -> "Belum ada dunia (World Save) untuk versi 26.3"
                             "resourcepacks" -> "Belum ada Resource Pack untuk versi 26.3"
                             "shaderpacks" -> "Belum ada Shader Pack (.hshader) untuk versi 26.3"

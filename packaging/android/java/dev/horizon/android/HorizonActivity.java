@@ -161,7 +161,9 @@ public final class HorizonActivity extends NativeActivity {
 
             Window win = splashDialog.getWindow();
             if (win != null) {
-                win.setBackgroundDrawable(new ColorDrawable(Color.BLACK));
+                // Use TRANSPARENT window background + FLAG_NOT_FOCUSABLE | FLAG_NOT_TOUCHABLE so Android
+                // WindowManager never marks the underlying NativeActivity Vulkan/GLES surface as occluded!
+                win.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
                 win.setLayout(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT
@@ -171,6 +173,7 @@ public final class HorizonActivity extends NativeActivity {
                         | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
                         | WindowManager.LayoutParams.FLAG_FULLSCREEN
                         | WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                        | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
                 );
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     WindowManager.LayoutParams lp = win.getAttributes();
@@ -208,6 +211,13 @@ public final class HorizonActivity extends NativeActivity {
         }
         splashOverlayView = null;
         splashDialog = null;
+        try {
+            View decor = getWindow() != null ? getWindow().getDecorView() : null;
+            if (decor != null) {
+                decor.requestFocus();
+            }
+        } catch (Exception ignored) {
+        }
         enableImmersiveFullscreen();
     }
 
@@ -1379,7 +1389,7 @@ public final class HorizonActivity extends NativeActivity {
             File homeDir = getFilesDir();
             if (homeDir == null) return;
             if (!homeDir.exists()) homeDir.mkdirs();
-            final String expectedStamp = "2.9-0.7.7-150a414";
+            final String expectedStamp = "3.0-0.7.7-150a414";
             File stampFile = new File(homeDir, "engine-data-version.txt");
             String currentStamp = stampFile.exists() ? readSmallTextFile(stampFile) : "";
             File engineZip = new File(homeDir, "engine-data.zip");

@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "2.9"
+    const val INSTALLED_LAUNCHER_VERSION = "3.0"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -630,9 +630,28 @@ object HorizonNativeBridge {
             "screenshots",
             "backups",
             "custom_wallpapers",
-            ".local/horizon-client/26.3"
+            ".local/horizon-client/26.3",
+            ".local/horizon-client/26.3/saves",
+            ".local/horizon-client/26.3/resourcepacks",
+            ".local/horizon-client/26.3/shaderpacks",
+            ".local/horizon-client/26.3/mods",
+            ".local/horizon-client/26.3/horizon-mods",
+            ".local/horizon-client/26.3/horizon-native-mods",
+            ".local/horizon-client/26.3/horizon-packs",
+            ".local/horizon-client/26.3/screenshots"
         ).forEach { sub ->
             File(home, sub).mkdirs()
+        }
+
+        // Self-heal stale 14-byte dummy asset-index.json markers that could cause a black screen on launch
+        val root26Check = File(home, ".local/horizon-client/26.3")
+        val assetIdxCheck = File(root26Check, "asset-index.json")
+        if (assetIdxCheck.isFile && assetIdxCheck.length() in 1L..64L) {
+            val content = runCatching { assetIdxCheck.readText().trim() }.getOrDefault("")
+            if (content == "{\"objects\":{}}" || content.length < 32) {
+                assetIdxCheck.delete()
+                File(root26Check, "android-downloads-v2.json").delete()
+            }
         }
 
         val engineZip = File(home, "engine-data.zip")
@@ -1736,6 +1755,83 @@ object HorizonNativeBridge {
         return listOf(home, profileHome, engine26Home).distinctBy { it.absolutePath }
     }
 
+    /**
+     * Synchronizes config files and content folders (`horizon-mods`, `shaderpacks`, `resourcepacks`,
+     * `saves`, `screenshots`, `horizon-packs`) bidirectionally across `home`, `profileHome`, and
+     * `.local/horizon-client/26.3` so in-game changes and Launcher Manager/Store changes never drift!
+     */
+    fun syncAllContentDirectoriesTwoWay(context: Context, profileSlot: Int = 0) {
+        val home = ensureHomeDirectories(context)
+        val profileHome = getProfileHome(home, profileSlot)
+        val engine26Home = File(home, ".local/horizon-client/26.3").apply { mkdirs() }
+        val allDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+
+        // 1. Sync single state files by picking the most recently modified copy across all runtime dirs
+        val syncedStateFiles = listOf(
+            "options.txt",
+            "options_horizon.txt",
+            "horizon-mods.txt",
+            "hmods.txt",
+            "hmod_list.json",
+            "horizon-shaders.txt",
+            "horizon-resourcepacks.txt",
+            "horizon-extras.txt",
+            "zalith-store-installed.json"
+        )
+        for (fname in syncedStateFiles) {
+            val newestSource = allDirs
+                .map { File(it, fname) }
+                .filter { it.isFile && it.length() > 0L }
+                .maxByOrNull { it.lastModified() }
+            if (newestSource != null) {
+                allDirs.forEach { dir: File ->
+                    val dst = File(dir, fname)
+                    if (dst.absolutePath != newestSource.absolutePath) {
+                        val shouldCopy = !dst.exists() || dst.length() != newestSource.length() || dst.lastModified() < newestSource.lastModified()
+                        if (shouldCopy) {
+                            runCatching { newestSource.copyTo(dst, overwrite = true) }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Sync content folders bidirectionally across home, profileHome, and .local/horizon-client/26.3
+        val contentFolders = listOf("horizon-mods", "shaderpacks", "resourcepacks", "saves", "screenshots", "horizon-packs")
+        for (folder in contentFolders) {
+            for (srcBase in allDirs) {
+                val srcDir = File(srcBase, folder)
+                if (!srcDir.isDirectory) continue
+                srcDir.listFiles()?.forEach { item ->
+                    if (item.name.endsWith(".part") || item.name.endsWith(".tmp")) return@forEach
+                    allDirs.forEach { dstBase: File ->
+                        if (dstBase.absolutePath == srcBase.absolutePath) return@forEach
+                        val dstDir = File(dstBase, folder).apply { mkdirs() }
+                        val dstItem = File(dstDir, item.name)
+                        if (item.isFile) {
+                            val shouldCopy = !dstItem.exists() || dstItem.length() != item.length() || dstItem.lastModified() < item.lastModified()
+                            if (shouldCopy) {
+                                runCatching { item.copyTo(dstItem, overwrite = true) }
+                            }
+                        } else if (item.isDirectory) {
+                            item.walkTopDown().filter { it.isFile }.forEach { subFile ->
+                                val rel = subFile.relativeTo(item).path
+                                val dstSub = File(dstItem, rel)
+                                val shouldCopySub = !dstSub.exists() || dstSub.length() != subFile.length() || dstSub.lastModified() < subFile.lastModified()
+                                if (shouldCopySub) {
+                                    runCatching {
+                                        dstSub.parentFile?.mkdirs()
+                                        subFile.copyTo(dstSub, overwrite = true)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun syncNativeHorizonAccountAndCatalog(
         home: File,
         activeAccount: ZalithAccount,
@@ -1791,16 +1887,14 @@ object HorizonNativeBridge {
                         put("provider", if (activeAccount.accountType == AccountType.ELY_BY) "ely.by" else "microsoft")
                     }
                 )
-                put("accounts", pubAccounts)
-                put("selected", activeAccount.uuid)
-                put("offline", JSONArray())
-                put("offline_selected", JSONObject.NULL)
-            } else {
-                put("accounts", pubAccounts)
-                put("selected", JSONObject.NULL)
-                put("offline", JSONArray().apply { put(activeAccount.username) })
-                put("offline_selected", activeAccount.username)
             }
+            // Always set offline_selected = activeAccount.username and selected = NULL in accounts.json
+            // so the native Launcher::action(events) launches immediately without blocking on an internal
+            // keychain prompt, while authenticated Microsoft/Ely.by tokens are passed directly via HORIZON_SESSION_FILE!
+            put("accounts", pubAccounts)
+            put("selected", JSONObject.NULL)
+            put("offline", JSONArray().apply { put(activeAccount.username) })
+            put("offline_selected", activeAccount.username)
         }
         allRuntimeDirs.forEach { dir: File ->
             File(dir, "accounts.json").writeText(accountsJson.toString(2))
@@ -2255,28 +2349,35 @@ object HorizonNativeBridge {
     fun isContentItemEnabled(context: Context, folder: String, fileName: String, profileSlot: Int = 0): Boolean {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
         return when (folder) {
             "mods" -> {
                 val modId = sanitizeModId(fileName)
                 val canonicalName = "$modId.hmod"
-                // Check `horizon-mods.txt` first (`mod.<id>:true` / `false`)
-                val hmodsTxt = File(profileHome, "horizon-mods.txt").takeIf { it.exists() } ?: File(home, "horizon-mods.txt")
-                if (hmodsTxt.exists()) {
+                // Check the newest `horizon-mods.txt` across all runtime directories first (`mod.<id>:true` / `false`)
+                val hmodsTxt = allRuntimeDirs
+                    .map { File(it, "horizon-mods.txt") }
+                    .filter { it.isFile && it.length() > 0L }
+                    .maxByOrNull { it.lastModified() }
+                if (hmodsTxt != null && hmodsTxt.exists()) {
                     val prefix = "mod.$modId:"
-                    val matchLine = hmodsTxt.readLines().firstOrNull { it.trim().startsWith(prefix) }
+                    val matchLine = runCatching { hmodsTxt.readLines().firstOrNull { it.trim().startsWith(prefix) } }.getOrNull()
                     if (matchLine != null) {
                         val valueStr = matchLine.substringAfter(':').trim()
                         return valueStr.equals("true", ignoreCase = true)
                     }
                 }
-                val hmodFile = File(profileHome, "hmod_list.json").takeIf { it.exists() } ?: File(home, "hmod_list.json")
-                if (!hmodFile.exists()) return modId !in OPT_IN_BUNDLED_MOD_IDS
+                val hmodFile = allRuntimeDirs
+                    .map { File(it, "hmod_list.json") }
+                    .filter { it.isFile && it.length() > 0L }
+                    .maxByOrNull { it.lastModified() }
+                if (hmodFile == null || !hmodFile.exists()) return modId !in OPT_IN_BUNDLED_MOD_IDS
                 runCatching {
                     val obj = JSONObject(hmodFile.readText())
                     val disabled = obj.optJSONArray("disabled") ?: return true
                     for (i in 0 until disabled.length()) {
                         val entry = disabled.optString(i)
-                        if (entry == fileName || entry == canonicalName || sanitizeModId(entry) == modId) {
+                        if (entry == fileName || entry == canonicalName || entry == modId || sanitizeModId(entry) == modId) {
                             return false
                         }
                     }
@@ -2284,14 +2385,61 @@ object HorizonNativeBridge {
                 }.getOrDefault(true)
             }
             "shaderpacks" -> {
-                val optFile = File(profileHome, "options.txt").takeIf { it.exists() } ?: File(home, "options.txt")
-                if (!optFile.exists()) return false
-                optFile.readLines().any { it.trim() == "shaderPack:$fileName" }
+                val stem = fileName.removeSuffix(".hshader").removeSuffix(".zip")
+                val cleanStem = sanitizeModId(stem)
+                val shadersTxt = allRuntimeDirs
+                    .map { File(it, "horizon-shaders.txt") }
+                    .filter { it.isFile && it.length() > 0L }
+                    .maxByOrNull { it.lastModified() }
+                if (shadersTxt != null) {
+                    val lines = runCatching { shadersTxt.readLines() }.getOrDefault(emptyList())
+                    val enabledFlag = lines.firstOrNull { it.startsWith("enabled:") }?.substringAfter("enabled:")?.trim()
+                    val packVal = lines.firstOrNull { it.startsWith("pack:") }?.substringAfter("pack:")?.trim().orEmpty()
+                    if (enabledFlag.equals("false", ignoreCase = true)) return false
+                    if (packVal.isNotEmpty()) {
+                        return packVal.equals(fileName, ignoreCase = true) ||
+                            packVal.equals(stem, ignoreCase = true) ||
+                            sanitizeModId(packVal) == cleanStem
+                    }
+                }
+                val optFile = allRuntimeDirs
+                    .map { File(it, "options.txt") }
+                    .filter { it.isFile && it.length() > 0L }
+                    .maxByOrNull { it.lastModified() }
+                    ?: return false
+                runCatching {
+                    optFile.readLines().any { line ->
+                        val t = line.trim()
+                        if (!t.startsWith("shaderPack:")) false
+                        else {
+                            val v = t.substringAfter("shaderPack:").trim().trim('"')
+                            v.isNotEmpty() && (v.equals(fileName, ignoreCase = true) || v.equals(stem, ignoreCase = true) || sanitizeModId(v) == cleanStem)
+                        }
+                    }
+                }.getOrDefault(false)
             }
             "resourcepacks" -> {
-                val optFile = File(profileHome, "options.txt").takeIf { it.exists() } ?: File(home, "options.txt")
-                if (!optFile.exists()) return false
-                optFile.readLines().any { it.startsWith("resourcePacks:") && it.contains(fileName) }
+                val stem = fileName.removeSuffix(".zip")
+                val optFile = allRuntimeDirs
+                    .map { File(it, "options.txt") }
+                    .filter { it.isFile && it.length() > 0L }
+                    .maxByOrNull { it.lastModified() }
+                    ?: return false
+                runCatching {
+                    optFile.readLines().any { line ->
+                        line.startsWith("resourcePacks:") && (
+                            line.contains("file/$fileName", ignoreCase = true) ||
+                                line.contains("\"$fileName\"", ignoreCase = true) ||
+                                line.contains("file/$stem", ignoreCase = true)
+                            )
+                    }
+                }.getOrDefault(false)
+            }
+            "modpacks", "horizon-packs" -> {
+                val cleanPackId = sanitizeModId(fileName)
+                val catItem = PLAYHORIZON_REVIEWED_CATALOG.firstOrNull { sanitizeModId(it.id) == cleanPackId }
+                val reqIds = catItem?.requiredModIds?.takeIf { it.isNotEmpty() } ?: listOf("mod_menu", "fps_overlay", "minimap")
+                reqIds.all { reqId -> isContentItemEnabled(context, "mods", "$reqId.hmod", profileSlot) }
             }
             else -> true
         }
@@ -2327,16 +2475,17 @@ object HorizonNativeBridge {
                     for (i in 0 until disabledArr.length()) {
                         set.add(disabledArr.optString(i))
                     }
-                    set.removeAll { sanitizeModId(it) == modId || it == fileName || it == canonicalName }
+                    set.removeAll { sanitizeModId(it) == modId || it == fileName || it == canonicalName || it == modId }
                     if (!enabled) {
                         set.add(canonicalName)
+                        set.add(modId)
                     }
                     val outArr = JSONArray()
                     set.forEach { outArr.put(it) }
                     obj.put("disabled", outArr)
                     hmodFile.writeText(obj.toString(2))
 
-                    // Sync `horizon-mods.txt` (`mod.<id>:true` / `false`) as read by `horizon-client` 26.3!
+                    // Sync `horizon-mods.txt` (`mod.<id>:true` / `false`) AND `hmods.txt` (`<id>=true` / `false`)
                     val hmodsTxt = File(dir, "horizon-mods.txt")
                     val lines = if (hmodsTxt.exists()) hmodsTxt.readLines().toMutableList() else mutableListOf()
                     val prefix = "mod.$modId:"
@@ -2352,6 +2501,21 @@ object HorizonNativeBridge {
                     }
                     hmodsTxt.writeText(updatedLines.joinToString("\n") + "\n")
 
+                    val legacyHmodsTxt = File(dir, "hmods.txt")
+                    val legLines = if (legacyHmodsTxt.exists()) legacyHmodsTxt.readLines().toMutableList() else mutableListOf()
+                    var foundLeg = false
+                    val updatedLeg = legLines.map { line ->
+                        val t = line.trim()
+                        if (t.startsWith("$modId=") || t.startsWith("$modId:") || t.startsWith("mod.$modId:")) {
+                            foundLeg = true
+                            "$modId=$enabled"
+                        } else line
+                    }.toMutableList()
+                    if (!foundLeg) {
+                        updatedLeg.add("$modId=$enabled")
+                    }
+                    legacyHmodsTxt.writeText(updatedLeg.joinToString("\n") + "\n")
+
                     // Also sync built-in Horizon native extras in `horizon-extras.txt` so HUD/input mods always work!
                     val extraUpdates = linkedMapOf<String, String>()
                     when (modId) {
@@ -2359,7 +2523,7 @@ object HorizonNativeBridge {
                         "keystrokes" -> extraUpdates["keystrokes"] = enabled.toString()
                         "zoom" -> extraUpdates["zoom"] = enabled.toString()
                         "minimap" -> extraUpdates["minimap"] = enabled.toString()
-                        "coords_hud", "coordinates_hud" -> extraUpdates["coordsHud"] = enabled.toString()
+                        "coords_hud", "coordinates_hud", "compass_bar" -> extraUpdates["coordsHud"] = enabled.toString()
                         "smartf3", "smart_f3" -> extraUpdates["smartF3"] = enabled.toString()
                         "mousetricks", "mouse_tweaks" -> {
                             extraUpdates["mouseTweaks"] = enabled.toString()
@@ -2389,6 +2553,18 @@ object HorizonNativeBridge {
                     if (!found) out.add("shaderPack:$targetVal")
                     optFile.writeText(out.joinToString("\n") + "\n")
 
+                    val optHorizonFile = File(dir, "options_horizon.txt")
+                    val ohLines = if (optHorizonFile.exists()) optHorizonFile.readLines().toMutableList() else mutableListOf()
+                    var foundOh = false
+                    val outOh = ohLines.map { line ->
+                        if (line.startsWith("shaderPack=") || line.startsWith("shaderPack:")) {
+                            foundOh = true
+                            "shaderPack=$targetVal"
+                        } else line
+                    }.toMutableList()
+                    if (!foundOh) outOh.add("shaderPack=$targetVal")
+                    optHorizonFile.writeText(outOh.joinToString("\n") + "\n")
+
                     updateKeyValTxtNonDestructively(
                         File(dir, "horizon-shaders.txt"),
                         linkedMapOf(
@@ -2399,6 +2575,7 @@ object HorizonNativeBridge {
                     )
                 }
                 "resourcepacks" -> {
+                    val stem = fileName.removeSuffix(".zip")
                     val optFile = File(dir, "options.txt")
                     val lines = if (optFile.exists()) optFile.readLines().toMutableList() else mutableListOf()
                     var found = false
@@ -2408,22 +2585,40 @@ object HorizonNativeBridge {
                             found = true
                             val inner = line.removePrefix("resourcePacks:[").removeSuffix("]")
                             val items = inner.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
+                            items.removeAll { token ->
+                                val cleanTok = token.trim().trim('"')
+                                cleanTok.equals("file/$fileName", ignoreCase = true) ||
+                                    cleanTok.equals(fileName, ignoreCase = true) ||
+                                    cleanTok.equals("file/$stem", ignoreCase = true)
+                            }
                             if (enabled) {
                                 if ("\"vanilla\"" !in items) items.add(0, "\"vanilla\"")
-                                if (entryToken !in items) items.add(entryToken)
-                            } else {
-                                items.remove(entryToken)
+                                items.add(entryToken)
                             }
                             "resourcePacks:[${items.joinToString(",")}]"
                         } else line
                     }.toMutableList()
-                    if (!found && enabled) {
-                        out.add("resourcePacks:[\"vanilla\",$entryToken]")
+                    if (!found) {
+                        if (enabled) {
+                            out.add("resourcePacks:[\"vanilla\",$entryToken]")
+                        } else {
+                            out.add("resourcePacks:[\"vanilla\"]")
+                        }
                     }
                     optFile.writeText(out.joinToString("\n") + "\n")
                 }
+                "modpacks", "horizon-packs" -> {
+                    val cleanPackId = sanitizeModId(fileName)
+                    val catItem = PLAYHORIZON_REVIEWED_CATALOG.firstOrNull { sanitizeModId(it.id) == cleanPackId }
+                    val reqIds = catItem?.requiredModIds?.takeIf { it.isNotEmpty() } ?: listOf("mod_menu", "fps_overlay", "minimap", "keystrokes", "zoom", "recipes", "coords_hud")
+                    reqIds.forEach { reqId ->
+                        val depId = sanitizeModId(reqId)
+                        setContentItemEnabled(context, "mods", "$depId.hmod", enabled, profileSlot, false)
+                    }
+                }
             }
         }
+        invalidateContentCaches()
         appendSystemLog("${if (enabled) "Enabled" else "Disabled"} $folder item: $fileName", logEnabled, context)
     }
 
@@ -2494,14 +2689,19 @@ object HorizonNativeBridge {
 
     fun isMinecraft26Ready(context: Context): Boolean {
         val home = ensureHomeDirectories(context)
+        val root26 = File(home, ".local/horizon-client/26.3")
+        val assetIndex = File(root26, "asset-index.json")
+        if (assetIndex.isFile && assetIndex.length() in 1L..64L) {
+            return false
+        }
         if (nativeLoaded) {
             try {
                 if (nativeIsGameInstalled(home.absolutePath)) return true
             } catch (ignored: Throwable) {
             }
         }
-        val root26 = File(home, ".local/horizon-client/26.3")
-        return File(root26, "android-downloads-v2.json").isFile
+        return File(root26, "android-downloads-v2.json").isFile &&
+            (File(root26, "extract-v2.json").isFile || (assetIndex.isFile && assetIndex.length() > 128L))
     }
 
     fun startMinecraft26Download(context: Context, logEnabled: Boolean = true): Boolean {
@@ -3277,7 +3477,8 @@ object HorizonNativeBridge {
     fun syncAndRepairShadersStorage(context: Context, profileSlot: Int = 0) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
-        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        allRuntimeDirs.forEach { base: File ->
             val shaderDir = File(base, "shaderpacks").apply { mkdirs() }
             shaderDir.listFiles()?.forEach { f ->
                 if (f.isFile && (f.name.endsWith(".hshader", true) || f.name.endsWith(".zip", true))) {
@@ -3307,8 +3508,9 @@ object HorizonNativeBridge {
     fun syncAndRepairModsStorage(context: Context, profileSlot: Int = 0) {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
 
-        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+        allRuntimeDirs.forEach { base: File ->
             val hmodDir = File(base, "horizon-mods").apply { mkdirs() }
             val legacyModsDir = File(base, "mods").apply { mkdirs() }
 
@@ -3675,7 +3877,8 @@ object HorizonNativeBridge {
             if (targetFile.deleteRecursively()) deletedAny = true
         }
 
-        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        allRuntimeDirs.forEach { base: File ->
             when (folder) {
                 "mods" -> {
                     listOf("horizon-mods", "mods", "horizon-native-mods").forEach { sub ->
@@ -3712,8 +3915,9 @@ object HorizonNativeBridge {
                         }
                     }
                 }
-                "resourcepacks", "shaderpacks", "saves", "screenshots" -> {
-                    val sibling = File(File(base, folder), fileName)
+                "resourcepacks", "shaderpacks", "saves", "screenshots", "modpacks", "horizon-packs" -> {
+                    val actualFolder = if (folder == "modpacks") "horizon-packs" else folder
+                    val sibling = File(File(base, actualFolder), fileName)
                     if (sibling.exists() && sibling.deleteRecursively()) {
                         deletedAny = true
                     }
@@ -3943,7 +4147,8 @@ object HorizonNativeBridge {
         val profileHome = getProfileHome(home, profileSlot)
         val cleanId = sanitizeModId(item.id)
         var deletedAny = false
-        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        allRuntimeDirs.forEach { base: File ->
             listOf("horizon-mods", "mods", "horizon-native-mods", "resourcepacks", "shaderpacks", "horizon-packs").forEach { sub ->
                 val dir = File(base, sub)
                 dir.listFiles()?.forEach { f ->
@@ -4719,7 +4924,92 @@ object HorizonNativeBridge {
         return baseList + listOf(prevRelease)
     }
 
-    private fun writeBuiltInHorizonArtifact(targetFile: File, item: StoreCatalogItem) {
+    fun ensureValidResourcePackZip(
+        targetFile: File,
+        fallbackTitle: String = "Horizon 26.3 Resource Pack",
+        fallbackSummary: String = "Compatible with Minecraft 26.3 (Horizon Rust Engine)"
+    ) {
+        val existingEntries = linkedMapOf<String, ByteArray>()
+        var hasValidMcmeta = false
+        if (targetFile.exists() && targetFile.length() > 22L) {
+            try {
+                ZipFile(targetFile).use { zf ->
+                    val entries = zf.entries()
+                    while (entries.hasMoreElements()) {
+                        val entry = entries.nextElement()
+                        if (!entry.isDirectory) {
+                            val bytes = zf.getInputStream(entry).use { it.readBytes() }
+                            existingEntries[entry.name] = bytes
+                            if (entry.name == "pack.mcmeta" && bytes.size > 16) {
+                                hasValidMcmeta = true
+                            }
+                        }
+                    }
+                }
+            } catch (ignored: Exception) {
+                existingEntries.clear()
+                hasValidMcmeta = false
+            }
+        }
+        if (hasValidMcmeta && existingEntries.size >= 2) {
+            return
+        }
+        val cleanTitle = fallbackTitle.replace("\"", "'").replace("\n", " ")
+        val cleanSummary = fallbackSummary.replace("\"", "'").replace("\n", " ")
+        val mcmeta = listOf(
+            "{",
+            "  \"pack\": {",
+            "    \"pack_format\": 75,",
+            "    \"supported_formats\": [15, 99],",
+            "    \"description\": \"$cleanTitle — $cleanSummary\"",
+            "  }",
+            "}"
+        ).joinToString("\n").toByteArray(Charsets.UTF_8)
+        existingEntries["pack.mcmeta"] = mcmeta
+
+        // Generate a crisp 16x16 borderless glass PNG & 64x64 pack.png if not already present
+        if ("pack.png" !in existingEntries) {
+            val iconBmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
+            for (y in 0 until 64) {
+                for (x in 0 until 64) {
+                    val border = x < 4 || x >= 60 || y < 4 || y >= 60
+                    iconBmp.setPixel(x, y, if (border) 0xFF8BE0FF.toInt() else 0xFF1A2630.toInt())
+                }
+            }
+            val bos = java.io.ByteArrayOutputStream()
+            iconBmp.compress(Bitmap.CompressFormat.PNG, 100, bos)
+            existingEntries["pack.png"] = bos.toByteArray()
+        }
+        if (existingEntries.keys.none { it.startsWith("assets/minecraft/") }) {
+            val glassBmp = Bitmap.createBitmap(16, 16, Bitmap.Config.ARGB_8888)
+            for (y in 0 until 16) {
+                for (x in 0 until 16) {
+                    val edge = x == 0 || x == 15 || y == 0 || y == 15
+                    glassBmp.setPixel(x, y, if (edge) 0x55C8F4FF else 0x00000000)
+                }
+            }
+            val bos = java.io.ByteArrayOutputStream()
+            glassBmp.compress(Bitmap.CompressFormat.PNG, 100, bos)
+            existingEntries["assets/minecraft/textures/block/glass.png"] = bos.toByteArray()
+        }
+
+        val tmpZip = File(targetFile.parentFile, "${targetFile.name}.rpack.tmp")
+        try {
+            ZipOutputStream(FileOutputStream(tmpZip)).use { zos ->
+                for ((entryName, data) in existingEntries) {
+                    zos.putNextEntry(ZipEntry(entryName))
+                    zos.write(data)
+                    zos.closeEntry()
+                }
+            }
+            if (targetFile.exists()) targetFile.delete()
+            tmpZip.renameTo(targetFile)
+        } catch (e: Exception) {
+            tmpZip.delete()
+        }
+    }
+
+    private fun writeBuiltInHorizonArtifact(context: Context, targetFile: File, item: StoreCatalogItem) {
         when (item.category) {
             StoreCategory.SHADER_PACK -> {
                 ensureValidHorizonShaderZip(
@@ -4731,20 +5021,11 @@ object HorizonNativeBridge {
                 )
             }
             StoreCategory.RESOURCE_PACK -> {
-                ZipOutputStream(FileOutputStream(targetFile)).use { zos ->
-                    val mcmeta = listOf(
-                        "{",
-                        "  \"pack\": {",
-                        "    \"pack_format\": 75,",
-                        "    \"supported_formats\": [15, 99],",
-                        "    \"description\": \"${item.title.replace("\"", "'")} — ${item.summary.replace("\"", "'")}\"",
-                        "  }",
-                        "}"
-                    ).joinToString("\n").toByteArray(Charsets.UTF_8)
-                    zos.putNextEntry(ZipEntry("pack.mcmeta"))
-                    zos.write(mcmeta)
-                    zos.closeEntry()
-                }
+                ensureValidResourcePackZip(
+                    targetFile = targetFile,
+                    fallbackTitle = item.title,
+                    fallbackSummary = item.summary
+                )
             }
             StoreCategory.MODPACK -> {
                 ZipOutputStream(FileOutputStream(targetFile)).use { zos ->
@@ -4767,9 +5048,25 @@ object HorizonNativeBridge {
             }
             else -> {
                 val cleanId = sanitizeModId(item.id)
+                var copiedBundledWasm = false
+                // 1. Check bundled APK assets (`builtin-mods/<id>.hmod`) first for instant offline/online reliability!
+                val assetCandidateNames = listOf("$cleanId.hmod", if (cleanId == "compass_bar") "coords_hud.hmod" else "")
+                    .filter { it.isNotEmpty() }
+                for (assetName in assetCandidateNames) {
+                    try {
+                        context.assets.open("builtin-mods/$assetName").use { inp ->
+                            FileOutputStream(targetFile).use { outp -> inp.copyTo(outp) }
+                        }
+                        if (targetFile.length() > 100L) {
+                            copiedBundledWasm = true
+                            break
+                        }
+                    } catch (ignored: Exception) {
+                    }
+                }
+                // 2. Try official GitHub release URL if not in APK assets
                 val officialUrl = OFFICIAL_EXECUTABLE_HMOD_URLS[cleanId]?.second
-                var fetchedRealWasm = false
-                if (!officialUrl.isNullOrBlank()) {
+                if (!copiedBundledWasm && !officialUrl.isNullOrBlank()) {
                     runCatching {
                         val conn = (URL(officialUrl).openConnection() as HttpURLConnection).apply {
                             connectTimeout = 7000
@@ -4781,30 +5078,24 @@ object HorizonNativeBridge {
                             conn.inputStream.use { inp ->
                                 FileOutputStream(targetFile).use { outp -> inp.copyTo(outp) }
                             }
-                            if (targetFile.length() > 100L) fetchedRealWasm = true
+                            if (targetFile.length() > 100L) copiedBundledWasm = true
                         }
                     }
                 }
-                if (!fetchedRealWasm) {
-                    // ALWAYS build a valid `.hmod` ZIP archive with root `horizon-mod.toml` (NEVER plain text!)
-                    ensureValidHorizonModZip(
+                // 3. Ensure valid `.hmod` ZIP with compliant `horizon-mod.toml`
+                ensureValidHorizonModZip(
                     targetFile = targetFile,
                     fallbackId = item.id,
                     fallbackTitle = item.title,
                     fallbackVersion = item.version,
                     fallbackSummary = item.summary,
                     fallbackAuthor = item.author,
-                        forceUpdateVersion = false
-                    )
-                }
+                    forceUpdateVersion = !copiedBundledWasm
+                )
             }
         }
     }
 
-    /**
-     * Removes any older/versioned files for `item` before installing an update so there are
-     * NEVER 2 versions of the same Mod, Resource Pack, Shader Pack, or Modpack!
-     */
     private fun removePreviousProjectFiles(baseDir: File, item: StoreCatalogItem) {
         val cleanId = sanitizeModId(item.id)
         when (item.category) {
@@ -4871,10 +5162,20 @@ object HorizonNativeBridge {
     ) {
         storeDownloadPaused.set(false)
         storeDownloadCancelled.set(false)
+        val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+        var lastUiProgressMs = 0L
+        fun postProgress(prog: StoreDownloadProgress, force: Boolean = false) {
+            val now = System.currentTimeMillis()
+            if (force || (now - lastUiProgressMs) >= 60L) {
+                lastUiProgressMs = now
+                mainHandler.post { onProgress(prog) }
+            }
+        }
 
         Thread({
             val home = ensureHomeDirectories(context)
             val profileHome = getProfileHome(home, profileSlot)
+            val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
             var partFile: File? = null
 
             try {
@@ -4888,7 +5189,7 @@ object HorizonNativeBridge {
                 partFile = File(destDir, "$canonicalFileName.part")
                 if (partFile.exists()) partFile.delete()
 
-                onProgress(
+                postProgress(
                     StoreDownloadProgress(
                         activeItemId = item.id,
                         activeTitle = item.title,
@@ -4897,133 +5198,162 @@ object HorizonNativeBridge {
                         percent = 4,
                         speedText = "Connecting...",
                         statusText = "playhorizon.dev/mods/${item.id}"
-                    )
+                    ),
+                    force = true
                 )
 
-                val actualUrl = item.downloadUrl
+                val rawUrl = item.downloadUrl.trim()
+                val actualUrl = when {
+                    rawUrl.startsWith("horizon-builtin://") || rawUrl.startsWith("http://") || rawUrl.startsWith("https://") -> rawUrl
+                    rawUrl.startsWith("/") -> "https://playhorizon.dev$rawUrl"
+                    rawUrl.isNotEmpty() -> "https://horizon-rust.github.io/horizon-mods/$rawUrl"
+                    else -> "horizon-builtin://mod/$cleanId"
+                }
                 appendSystemLog("Downloading '${item.title}' (v${item.version}) from $actualUrl", logEnabled, context)
 
                 if (actualUrl.startsWith("horizon-builtin://")) {
-                    for (step in 1..5) {
+                    for (step in 1..4) {
                         while (storeDownloadPaused.get() && !storeDownloadCancelled.get()) {
                             Thread.sleep(150L)
                         }
                         if (storeDownloadCancelled.get()) break
-                        val pct = step * 18
-                        onProgress(
+                        val pct = step * 22
+                        postProgress(
                             StoreDownloadProgress(
                                 activeItemId = item.id,
                                 activeTitle = item.title,
                                 running = true,
                                 paused = false,
                                 percent = pct,
-                                speedText = "420 KB/s",
+                                speedText = "Local Bundle",
                                 statusText = "Verifying & packaging $canonicalFileName..."
-                            )
+                            ),
+                            force = true
                         )
-                        Thread.sleep(100L)
+                        Thread.sleep(70L)
                     }
                     if (!storeDownloadCancelled.get()) {
-                        writeBuiltInHorizonArtifact(partFile, item)
+                        writeBuiltInHorizonArtifact(context, partFile, item)
                     }
                 } else {
-                    val conn = (URL(actualUrl).openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 10000
-                        readTimeout = 15000
-                        instanceFollowRedirects = true
-                        setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION (playhorizon.dev/mods)")
-                    }
-                    val responseCode = conn.responseCode
-                    if (responseCode in 200..299) {
-                        val totalBytes = conn.contentLengthLong.coerceAtLeast(item.sizeBytes).coerceAtLeast(1L)
-                        var downloaded = 0L
-                        val t0 = System.currentTimeMillis()
+                    var downloadedOk = false
+                    try {
+                        val conn = (URL(actualUrl).openConnection() as HttpURLConnection).apply {
+                            connectTimeout = 10000
+                            readTimeout = 15000
+                            instanceFollowRedirects = true
+                            setRequestProperty("User-Agent", "HorizonZ-Launcher/$INSTALLED_LAUNCHER_VERSION (playhorizon.dev/mods)")
+                        }
+                        val responseCode = conn.responseCode
+                        if (responseCode in 200..299) {
+                            val totalBytes = conn.contentLengthLong.coerceAtLeast(item.sizeBytes).coerceAtLeast(1L)
+                            var downloaded = 0L
+                            val t0 = System.currentTimeMillis()
 
-                        conn.inputStream.use { input ->
-                            FileOutputStream(partFile).use { output ->
-                                val buf = ByteArray(16384)
-                                while (true) {
-                                    while (storeDownloadPaused.get() && !storeDownloadCancelled.get()) {
-                                        onProgress(
+                            conn.inputStream.use { input ->
+                                FileOutputStream(partFile).use { output ->
+                                    val buf = ByteArray(16384)
+                                    while (true) {
+                                        while (storeDownloadPaused.get() && !storeDownloadCancelled.get()) {
+                                            postProgress(
+                                                StoreDownloadProgress(
+                                                    activeItemId = item.id,
+                                                    activeTitle = item.title,
+                                                    running = true,
+                                                    paused = true,
+                                                    percent = ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99),
+                                                    speedText = "Paused",
+                                                    statusText = "Paused (${downloaded / 1024} KB)"
+                                                ),
+                                                force = true
+                                            )
+                                            Thread.sleep(200L)
+                                        }
+                                        if (storeDownloadCancelled.get()) break
+                                        val read = input.read(buf)
+                                        if (read <= 0) break
+                                        output.write(buf, 0, read)
+                                        downloaded += read
+
+                                        val elapsedSec = ((System.currentTimeMillis() - t0) / 1000.0).coerceAtLeast(0.05)
+                                        val kbps = (downloaded / 1024.0) / elapsedSec
+                                        val speedStr = if (kbps >= 1024.0) String.format(Locale.US, "%.2f MB/s", kbps / 1024.0)
+                                        else String.format(Locale.US, "%.1f KB/s", kbps)
+                                        val pct = ((downloaded * 100L) / totalBytes).toInt().coerceIn(1, 99)
+
+                                        postProgress(
                                             StoreDownloadProgress(
                                                 activeItemId = item.id,
                                                 activeTitle = item.title,
                                                 running = true,
-                                                paused = true,
-                                                percent = ((downloaded * 100L) / totalBytes).toInt().coerceIn(0, 99),
-                                                speedText = "Paused",
-                                                statusText = "Paused (${downloaded / 1024} KB)"
+                                                paused = false,
+                                                percent = pct,
+                                                speedText = speedStr,
+                                                statusText = "${downloaded / 1024} / ${totalBytes / 1024} KB • playhorizon.dev"
                                             )
                                         )
-                                        Thread.sleep(200L)
                                     }
-                                    if (storeDownloadCancelled.get()) break
-                                    val read = input.read(buf)
-                                    if (read <= 0) break
-                                    output.write(buf, 0, read)
-                                    downloaded += read
-
-                                    val elapsedSec = ((System.currentTimeMillis() - t0) / 1000.0).coerceAtLeast(0.05)
-                                    val kbps = (downloaded / 1024.0) / elapsedSec
-                                    val speedStr = if (kbps >= 1024.0) String.format(Locale.US, "%.2f MB/s", kbps / 1024.0)
-                                    else String.format(Locale.US, "%.1f KB/s", kbps)
-                                    val pct = ((downloaded * 100L) / totalBytes).toInt().coerceIn(1, 99)
-
-                                    onProgress(
-                                        StoreDownloadProgress(
-                                            activeItemId = item.id,
-                                            activeTitle = item.title,
-                                            running = true,
-                                            paused = false,
-                                            percent = pct,
-                                            speedText = speedStr,
-                                            statusText = "${downloaded / 1024} / ${totalBytes / 1024} KB • playhorizon.dev"
-                                        )
-                                    )
                                 }
                             }
+                            if (partFile.exists() && partFile.length() > 64L) {
+                                downloadedOk = true
+                            }
                         }
-                    } else {
-                        writeBuiltInHorizonArtifact(partFile, item)
+                    } catch (dlErr: Exception) {
+                        Log.w(TAG, "Direct download notice for ${item.id}, using built-in artifact fallback: ${dlErr.message}")
+                    }
+                    if (!downloadedOk && !storeDownloadCancelled.get()) {
+                        writeBuiltInHorizonArtifact(context, partFile, item)
                     }
                 }
 
                 if (storeDownloadCancelled.get()) {
                     partFile.delete()
-                    onProgress(StoreDownloadProgress())
+                    postProgress(StoreDownloadProgress(), force = true)
                     onComplete(false, "Download '${item.title}' dibatalkan & file sementara dihapus.")
                     return@Thread
                 }
 
-                // If it's a Mod or Native Mod, preserve `.hnmod` in `horizon-native-mods/` if applicable and validate `.hmod`!
-                if (item.category == StoreCategory.MOD || item.category == StoreCategory.NATIVE_MOD) {
-                    if (actualUrl.endsWith(".hnmod", ignoreCase = true) || item.category == StoreCategory.NATIVE_MOD) {
-                        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
-                            val nativeDir = File(base, "horizon-native-mods").apply { mkdirs() }
-                            runCatching { partFile.copyTo(File(nativeDir, "$cleanId.hnmod"), overwrite = true) }
+                // Validate & self-heal the downloaded archive by category
+                when (item.category) {
+                    StoreCategory.MOD, StoreCategory.NATIVE_MOD -> {
+                        if (actualUrl.endsWith(".hnmod", ignoreCase = true) || item.category == StoreCategory.NATIVE_MOD) {
+                            allRuntimeDirs.forEach { base: File ->
+                                val nativeDir = File(base, "horizon-native-mods").apply { mkdirs() }
+                                runCatching { partFile.copyTo(File(nativeDir, "$cleanId.hnmod"), overwrite = true) }
+                            }
                         }
+                        ensureValidHorizonModZip(
+                            targetFile = partFile,
+                            fallbackId = cleanId,
+                            fallbackTitle = item.title,
+                            fallbackVersion = item.version,
+                            fallbackSummary = item.summary,
+                            fallbackAuthor = item.author,
+                            forceUpdateVersion = true
+                        )
                     }
-                    ensureValidHorizonModZip(
-                        targetFile = partFile,
-                        fallbackId = cleanId,
-                        fallbackTitle = item.title,
-                        fallbackVersion = item.version,
-                        fallbackSummary = item.summary,
-                        fallbackAuthor = item.author,
-                        forceUpdateVersion = true
-                    )
-                } else if (item.category == StoreCategory.SHADER_PACK) {
-                    ensureValidHorizonShaderZip(
-                        targetFile = partFile,
-                        fallbackId = cleanId,
-                        fallbackTitle = item.title,
-                        fallbackVersion = item.version,
-                        fallbackSummary = item.summary
-                    )
+                    StoreCategory.SHADER_PACK -> {
+                        ensureValidHorizonShaderZip(
+                            targetFile = partFile,
+                            fallbackId = cleanId,
+                            fallbackTitle = item.title,
+                            fallbackVersion = item.version,
+                            fallbackSummary = item.summary
+                        )
+                    }
+                    StoreCategory.RESOURCE_PACK -> {
+                        ensureValidResourcePackZip(
+                            targetFile = partFile,
+                            fallbackTitle = item.title,
+                            fallbackSummary = item.summary
+                        )
+                    }
+                    else -> {}
                 }
 
-                // Remove any older versions of this project first so updates overwrite cleanly without duplicates!
-                listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+                // Remove any older versions across ALL runtime directories (home, profileHome, .local/horizon-client/26.3)
+                allRuntimeDirs.forEach { base: File ->
                     removePreviousProjectFiles(base, item)
                 }
 
@@ -5033,13 +5363,12 @@ object HorizonNativeBridge {
 
                 when (item.category) {
                     StoreCategory.MOD, StoreCategory.NATIVE_MOD -> {
-                        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+                        allRuntimeDirs.forEach { base: File ->
                             val hmodDir = File(base, "horizon-mods").apply { mkdirs() }
                             val canonicalTarget = File(hmodDir, "$cleanId.hmod")
                             if (canonicalTarget.absolutePath != finalFile.absolutePath) {
                                 finalFile.copyTo(canonicalTarget, overwrite = true)
                             }
-                            // Remove any leftover file in `mods/` so only `horizon-mods/<id>.hmod` exists
                             File(base, "mods").listFiles()?.forEach { f ->
                                 if (sanitizeModId(f.name) == cleanId) f.delete()
                             }
@@ -5048,7 +5377,7 @@ object HorizonNativeBridge {
                     }
 
                     StoreCategory.RESOURCE_PACK -> {
-                        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+                        allRuntimeDirs.forEach { base: File ->
                             val target = File(File(base, "resourcepacks").apply { mkdirs() }, canonicalFileName)
                             if (target.absolutePath != finalFile.absolutePath) {
                                 finalFile.copyTo(target, overwrite = true)
@@ -5058,7 +5387,7 @@ object HorizonNativeBridge {
                     }
 
                     StoreCategory.SHADER_PACK -> {
-                        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+                        allRuntimeDirs.forEach { base: File ->
                             val target = File(File(base, "shaderpacks").apply { mkdirs() }, canonicalFileName)
                             if (target.absolutePath != finalFile.absolutePath) {
                                 finalFile.copyTo(target, overwrite = true)
@@ -5068,11 +5397,16 @@ object HorizonNativeBridge {
                     }
 
                     StoreCategory.MODPACK -> {
-                        listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
-                            val packDir = File(base, "horizon-packs/$cleanId").apply { mkdirs() }
-                            val target = File(packDir, canonicalFileName)
-                            if (target.absolutePath != finalFile.absolutePath) {
-                                finalFile.copyTo(target, overwrite = true)
+                        allRuntimeDirs.forEach { base: File ->
+                            val packRoot = File(base, "horizon-packs").apply { mkdirs() }
+                            val directPackFile = File(packRoot, canonicalFileName)
+                            if (directPackFile.absolutePath != finalFile.absolutePath) {
+                                finalFile.copyTo(directPackFile, overwrite = true)
+                            }
+                            val packSubDir = File(packRoot, cleanId).apply { mkdirs() }
+                            val subTarget = File(packSubDir, canonicalFileName)
+                            if (subTarget.absolutePath != finalFile.absolutePath) {
+                                finalFile.copyTo(subTarget, overwrite = true)
                             }
                         }
                         val allCatalog = PLAYHORIZON_REVIEWED_CATALOG.associateBy { sanitizeModId(it.id) }
@@ -5081,10 +5415,10 @@ object HorizonNativeBridge {
                             val dep = allCatalog[depId]
                             if (dep != null) {
                                 val depFileName = "$depId.hmod"
-                                listOf(home, profileHome).distinctBy { it.absolutePath }.forEach { base ->
+                                allRuntimeDirs.forEach { base: File ->
                                     val mFile = File(File(base, "horizon-mods").apply { mkdirs() }, depFileName)
                                     if (!mFile.exists()) {
-                                        writeBuiltInHorizonArtifact(mFile, dep)
+                                        writeBuiltInHorizonArtifact(context, mFile, dep)
                                     } else {
                                         ensureValidHorizonModZip(mFile, depId, dep.title, dep.version, dep.summary, dep.author)
                                     }
@@ -5099,13 +5433,14 @@ object HorizonNativeBridge {
                 }
 
                 recordInstalledStoreItem(context, profileSlot, item.id, item.version, canonicalFileName)
+                syncAndRepairModsStorage(context, profileSlot)
                 invalidateContentCaches()
-                onProgress(StoreDownloadProgress())
+                postProgress(StoreDownloadProgress(), force = true)
                 appendSystemLog("Installed '${item.title}' v${item.version} ($canonicalFileName).", logEnabled, context)
                 onComplete(true, "Berhasil memasang ${item.title} (v${item.version})!")
             } catch (e: Exception) {
                 partFile?.delete()
-                onProgress(StoreDownloadProgress())
+                postProgress(StoreDownloadProgress(), force = true)
                 appendSystemLog("Store download error for ${item.title}: ${e.message}", logEnabled, context)
                 onComplete(false, "Gagal mengunduh ${item.title}: ${e.message}")
             }
@@ -5439,27 +5774,124 @@ object HorizonNativeBridge {
     // FILE IMPORT, STRUCTURED LOG READER, & GAME LAUNCH
     // ========================================================================
 
-    fun importUriToDestination(context: Context, uri: Uri, subFolder: String, targetFileName: String, logEnabled: Boolean = true): File? {
+    fun resolveDisplayNameFromUri(context: Context, uri: Uri, fallbackName: String): String {
+        var resolved = ""
+        runCatching {
+            context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if (cursor.moveToFirst()) {
+                    val idx = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) {
+                        resolved = cursor.getString(idx).orEmpty().trim()
+                    }
+                }
+            }
+        }
+        if (resolved.isBlank()) {
+            resolved = uri.lastPathSegment?.substringAfterLast('/')?.substringAfterLast(':').orEmpty().trim()
+        }
+        val clean = resolved.replace(Regex("[^a-zA-Z0-9._\\- ]"), "_").trim()
+        return clean.ifBlank { fallbackName }
+    }
+
+    fun importUriToDestination(
+        context: Context,
+        uri: Uri,
+        subFolder: String,
+        targetFileName: String,
+        logEnabled: Boolean = true,
+        profileSlot: Int = 0
+    ): File? {
         return try {
             val home = ensureHomeDirectories(context)
-            val isModTarget = subFolder in listOf("mods", "horizon-mods", "horizon-native-mods")
-            val finalSubFolder = if (isModTarget) "horizon-mods" else subFolder
-            val finalFileName = if (isModTarget) "${sanitizeModId(targetFileName)}.hmod" else targetFileName
-            val destDir = if (finalSubFolder.isEmpty()) home else File(home, finalSubFolder)
-            destDir.mkdirs()
+            val profileHome = getProfileHome(home, profileSlot)
+            val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+            val realFileName = resolveDisplayNameFromUri(context, uri, targetFileName)
+            val lowerName = realFileName.lowercase(Locale.US)
+
+            val isModTarget = subFolder in listOf("mods", "horizon-mods", "horizon-native-mods") ||
+                lowerName.endsWith(".hmod") || lowerName.endsWith(".hnmod") || lowerName.endsWith(".jar")
+            val isShaderTarget = subFolder == "shaderpacks" || lowerName.endsWith(".hshader")
+            val isModpackTarget = subFolder in listOf("modpacks", "horizon-packs") || lowerName.endsWith(".hpack")
+
+            val finalSubFolder = when {
+                isModTarget -> "horizon-mods"
+                isShaderTarget -> "shaderpacks"
+                isModpackTarget -> "horizon-packs"
+                subFolder.isEmpty() -> ""
+                else -> subFolder
+            }
+            val finalFileName = when {
+                isModTarget -> "${sanitizeModId(realFileName)}.hmod"
+                isShaderTarget -> if (lowerName.endsWith(".hshader") || lowerName.endsWith(".zip")) realFileName else "$realFileName.hshader"
+                isModpackTarget -> if (lowerName.endsWith(".hpack")) realFileName else "${sanitizeModId(realFileName)}-1.0.0.hpack"
+                subFolder == "resourcepacks" -> if (lowerName.endsWith(".zip")) realFileName else "$realFileName.zip"
+                else -> realFileName
+            }
+
+            val destDir = if (finalSubFolder.isEmpty()) profileHome else File(profileHome, finalSubFolder).apply { mkdirs() }
             val outFile = File(destDir, finalFileName)
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(outFile).use { output ->
                     input.copyTo(output)
                 }
             }
-            if (isModTarget) {
-                val modId = sanitizeModId(finalFileName)
-                ensureValidHorizonModZip(outFile, modId)
-                val info = inspectModPackage(outFile)
-                setContentItemEnabled(context, "mods", finalFileName, true, 0, false)
-                recordInstalledStoreItem(context, 0, info.modId, info.version, finalFileName)
+
+            when {
+                isModTarget -> {
+                    val modId = sanitizeModId(finalFileName)
+                    ensureValidHorizonModZip(outFile, modId)
+                    val info = inspectModPackage(outFile)
+                    allRuntimeDirs.forEach { dir: File ->
+                        val target = File(File(dir, "horizon-mods").apply { mkdirs() }, finalFileName)
+                        if (target.absolutePath != outFile.absolutePath) {
+                            runCatching { outFile.copyTo(target, overwrite = true) }
+                        }
+                    }
+                    setContentItemEnabled(context, "mods", finalFileName, true, profileSlot, false)
+                    recordInstalledStoreItem(context, profileSlot, info.modId, info.version, finalFileName)
+                }
+                isShaderTarget -> {
+                    ensureValidHorizonShaderZip(outFile, finalFileName)
+                    allRuntimeDirs.forEach { dir: File ->
+                        val target = File(File(dir, "shaderpacks").apply { mkdirs() }, finalFileName)
+                        if (target.absolutePath != outFile.absolutePath) {
+                            runCatching { outFile.copyTo(target, overwrite = true) }
+                        }
+                    }
+                    setContentItemEnabled(context, "shaderpacks", finalFileName, true, profileSlot, false)
+                    recordInstalledStoreItem(context, profileSlot, sanitizeModId(finalFileName), "1.0.0", finalFileName)
+                }
+                finalSubFolder == "resourcepacks" -> {
+                    ensureValidResourcePackZip(outFile, finalFileName.removeSuffix(".zip"))
+                    allRuntimeDirs.forEach { dir: File ->
+                        val target = File(File(dir, "resourcepacks").apply { mkdirs() }, finalFileName)
+                        if (target.absolutePath != outFile.absolutePath) {
+                            runCatching { outFile.copyTo(target, overwrite = true) }
+                        }
+                    }
+                    setContentItemEnabled(context, "resourcepacks", finalFileName, true, profileSlot, false)
+                    recordInstalledStoreItem(context, profileSlot, sanitizeModId(finalFileName), "1.0.0", finalFileName)
+                }
+                isModpackTarget -> {
+                    allRuntimeDirs.forEach { dir: File ->
+                        val target = File(File(dir, "horizon-packs").apply { mkdirs() }, finalFileName)
+                        if (target.absolutePath != outFile.absolutePath) {
+                            runCatching { outFile.copyTo(target, overwrite = true) }
+                        }
+                    }
+                    setContentItemEnabled(context, "modpacks", finalFileName, true, profileSlot, false)
+                    recordInstalledStoreItem(context, profileSlot, sanitizeModId(finalFileName), "1.0.0", finalFileName)
+                }
+                finalSubFolder.isNotEmpty() -> {
+                    allRuntimeDirs.forEach { dir: File ->
+                        val target = File(File(dir, finalSubFolder).apply { mkdirs() }, finalFileName)
+                        if (target.absolutePath != outFile.absolutePath) {
+                            runCatching { outFile.copyTo(target, overwrite = true) }
+                        }
+                    }
+                }
             }
+            invalidateContentCaches()
             appendSystemLog("Imported file to $finalSubFolder/${outFile.name} (${outFile.length() / 1024} KB)", logEnabled, context)
             outFile
         } catch (e: Exception) {
@@ -5574,6 +6006,7 @@ object HorizonNativeBridge {
         val home = ensureHomeDirectories(context)
         File(home, "zalith-game-exited.flag").delete()
         File(home, "zalith-game-boot.txt").writeText("12|Preparing Profile, Mods & Skin...")
+        runCatching { syncAllContentDirectoriesTwoWay(context, config.profile) }
         runCatching { syncAndRepairModsStorage(context, config.profile) }
         runCatching { syncAndRepairShadersStorage(context, config.profile) }
         File(home, "zalith-game-boot.txt").writeText("22|Syncing Engine Config & options.txt...")
