@@ -242,7 +242,7 @@ public final class HorizonActivity extends NativeActivity {
                         runOnUiThread(this::returnToLauncherAndFinish);
                         break;
                     }
-                    Thread.sleep(750L);
+                    Thread.sleep(1400L);
                 } catch (InterruptedException ignored) {
                     break;
                 }
@@ -312,7 +312,11 @@ public final class HorizonActivity extends NativeActivity {
             if (watchdogRunning && !isFinishing()) {
                 showInGameAiFloatingButton(homeDir, modelId, taskPrompt, autonomousActions);
             }
-        }, 3600L);
+        }, 3400L);
+
+        if (localKeyCheck.isEmpty()) {
+            return;
+        }
 
         Thread agentThread = new Thread(() -> {
             String localApiKey = readLocalGeminiKey(homeDir);
@@ -352,9 +356,9 @@ public final class HorizonActivity extends NativeActivity {
                             }
                         }
                     }
-                    Thread.sleep(2200L);
+                    Thread.sleep(3500L);
                 } catch (Exception ignored) {
-                    try { Thread.sleep(2200L); } catch (InterruptedException ie) { break; }
+                    try { Thread.sleep(3500L); } catch (InterruptedException ie) { break; }
                 }
             }
         }, "HorizonZ-GeminiAgentBridge");
@@ -1389,7 +1393,7 @@ public final class HorizonActivity extends NativeActivity {
             File homeDir = getFilesDir();
             if (homeDir == null) return;
             if (!homeDir.exists()) homeDir.mkdirs();
-            final String expectedStamp = "3.1-0.7.7-150a414";
+            final String expectedStamp = "3.2-0.7.7-150a414";
             File stampFile = new File(homeDir, "engine-data-version.txt");
             String currentStamp = stampFile.exists() ? readSmallTextFile(stampFile) : "";
             File engineZip = new File(homeDir, "engine-data.zip");
@@ -1436,8 +1440,12 @@ public final class HorizonActivity extends NativeActivity {
                 }
                 File wardrobeFile = new File(new File(homeDir, "wardrobe"), "wardrobe.json");
                 if (wardrobeFile.exists()) {
-                    Os.setenv("HORIZON_WARDROBE_CONFIG", wardrobeFile.getAbsolutePath(), true);
+                    String wTxt = readSmallTextFile(wardrobeFile);
+                    if (wTxt.contains("\"selections\"") || wTxt.trim().isEmpty()) {
+                        wardrobeFile.delete();
+                    }
                 }
+                try { Os.unsetenv("HORIZON_WARDROBE_CONFIG"); } catch (Exception ignored) {}
             }
             if (intent != null) {
                 boolean publicMode = intent.getBooleanExtra("HORIZON_ANDROID_PUBLIC", true);
@@ -1677,15 +1685,21 @@ public final class HorizonActivity extends NativeActivity {
             GLYPH_H, GLYPH_CREEPER_O, GLYPH_R, GLYPH_I, GLYPH_Z, GLYPH_O, GLYPH_N, GLYPH_Z
         };
 
+        private long lastMilestonePollMs = 0L;
+
         private final Runnable frameLoop = new Runnable() {
             @Override
             public void run() {
                 if (!active) return;
-                pollBootMilestone();
+                long now = System.currentTimeMillis();
+                if (now - lastMilestonePollMs >= 180L) {
+                    lastMilestonePollMs = now;
+                    pollBootMilestone();
+                }
                 updateAnimationState();
                 invalidate();
                 if (active) {
-                    handler.postDelayed(this, 16L);
+                    handler.postDelayed(this, 32L);
                 }
             }
         };

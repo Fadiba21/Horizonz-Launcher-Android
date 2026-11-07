@@ -68,7 +68,7 @@ def ensure_upstream_include_assets():
             fetched = False
             for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.1"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.2"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read()
                     if data:
@@ -112,7 +112,7 @@ if pages_rs.exists():
     ptxt = pages_rs.read_text(encoding="utf-8")
     old_draw_fn = "pub(super) fn draw_pages(&mut self) -> Result<()> {"
     new_draw_fn = '''pub(super) fn draw_pages(&mut self) -> Result<()> {
-        if std::env::var_os("HORIZON_SHOW_INTERNAL_UI").is_none() && self.error.is_none() && self.worker.is_none() {
+        if std::env::var_os("HORIZON_SHOW_INTERNAL_UI").is_none() {
             return Ok(());
         }'''
     if old_draw_fn in ptxt and "HORIZON_SHOW_INTERNAL_UI" not in ptxt:
@@ -194,12 +194,31 @@ fn sync_dir_contents_non_destructive(src_dir: &std::path::Path, dst_dir: &std::p
     }
 }
 
+fn purge_damaged_wardrobe_index(home: &std::path::Path) {
+    for candidate in [
+        home.join("wardrobe/wardrobe.json"),
+        home.join(".local/horizon-client").join(horizon_core::VANILLA_VERSION).join("wardrobe/wardrobe.json"),
+    ] {
+        if candidate.is_file() {
+            let should_delete = match std::fs::read_to_string(&candidate) {
+                Ok(txt) => txt.contains("\"selections\"") || txt.trim().is_empty(),
+                Err(_) => true,
+            };
+            if should_delete {
+                let _ = std::fs::remove_file(&candidate);
+            }
+        }
+    }
+}
+
 fn sync_horizonz_runtime_files(home: &std::path::Path) {
+    purge_damaged_wardrobe_index(home);
     let engine_dir = home.join(".local/horizon-client").join(horizon_core::VANILLA_VERSION);
     let _ = std::fs::create_dir_all(&engine_dir);
     for fname in [
         "options.txt",
         "options_horizon.txt",
+        "horizon-graphics.txt",
         "horizon-extras.txt",
         "horizon-mods.txt",
         "hmods.txt",
@@ -220,9 +239,8 @@ fn sync_horizonz_runtime_files(home: &std::path::Path) {
             let _ = std::fs::copy(&src, &dst);
         }
     }
-    for dname in ["horizon-mods", "mods", "shaderpacks", "resourcepacks", "saves", "screenshots", "horizon-packs"] {
+    for dname in ["horizon-mods", "shaderpacks", "resourcepacks"] {
         sync_dir_contents_non_destructive(&home.join(dname), &engine_dir.join(dname));
-        sync_dir_contents_non_destructive(&engine_dir.join(dname), &home.join(dname));
     }
 }
 
@@ -234,6 +252,7 @@ fn sync_horizonz_engine_back_to_home(home: &std::path::Path) {
     for fname in [
         "options.txt",
         "options_horizon.txt",
+        "horizon-graphics.txt",
         "horizon-extras.txt",
         "horizon-mods.txt",
         "hmods.txt",
@@ -246,21 +265,34 @@ fn sync_horizonz_engine_back_to_home(home: &std::path::Path) {
             let _ = std::fs::copy(&src, &dst);
         }
     }
-    for dname in ["horizon-mods", "shaderpacks", "resourcepacks", "saves", "screenshots"] {
+    for dname in ["horizon-mods", "shaderpacks", "resourcepacks", "screenshots"] {
         sync_dir_contents_non_destructive(&engine_dir.join(dname), &home.join(dname));
     }
 }
 
 fn apply_horizonz_shader_and_agent_config(home: &std::path::Path) {
     sync_horizonz_runtime_files(home);
-    // 1. Propagate active shader pack from options.txt / horizon-shaders.txt to HORIZON_SHADER_PACK
+    // 1. Propagate active shader pack across horizon-graphics.txt (pickedShaderPack:), horizon-shaders.txt, options.txt, and HORIZON_SHADER_PACK
     let mut active_shader = String::new();
-    if let Ok(sh_txt) = std::fs::read_to_string(home.join("horizon-shaders.txt")) {
-        for line in sh_txt.lines() {
-            if let Some(p) = line.strip_prefix("pack:") {
-                let trimmed = p.trim();
-                if !trimmed.is_empty() {
+    if let Ok(gr_txt) = std::fs::read_to_string(home.join("horizon-graphics.txt")) {
+        for line in gr_txt.lines() {
+            let t = line.trim();
+            if let Some(p) = t.strip_prefix("pickedShaderPack:").or_else(|| t.strip_prefix("pickedShaderPack=")) {
+                let trimmed = p.trim().trim_matches('"');
+                if !trimmed.is_empty() && !trimmed.eq_ignore_ascii_case("none") && !trimmed.eq_ignore_ascii_case("off") {
                     active_shader = trimmed.to_string();
+                }
+            }
+        }
+    }
+    if active_shader.is_empty() {
+        if let Ok(sh_txt) = std::fs::read_to_string(home.join("horizon-shaders.txt")) {
+            for line in sh_txt.lines() {
+                if let Some(p) = line.strip_prefix("pack:") {
+                    let trimmed = p.trim();
+                    if !trimmed.is_empty() {
+                        active_shader = trimmed.to_string();
+                    }
                 }
             }
         }
@@ -278,8 +310,34 @@ fn apply_horizonz_shader_and_agent_config(home: &std::path::Path) {
         }
     }
     if !active_shader.is_empty() {
+        let engine_dir = home.join(".local/horizon-client").join(horizon_core::VANILLA_VERSION);
+        for base in [home, engine_dir.as_path()] {
+            let gf = base.join("horizon-graphics.txt");
+            let existing = std::fs::read_to_string(&gf).unwrap_or_default();
+            let mut found = false;
+            let mut out_lines: Vec<String> = existing
+                .lines()
+                .map(|l| {
+                    let t = l.trim();
+                    if t.starts_with("pickedShaderPack:") || t.starts_with("pickedShaderPack=") {
+                        found = true;
+                        format!("pickedShaderPack:{active_shader}")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect();
+            if !found {
+                out_lines.push(format!("pickedShaderPack:{active_shader}"));
+            }
+            let _ = std::fs::write(&gf, out_lines.join("\n") + "\n");
+        }
         unsafe {
             std::env::set_var("HORIZON_SHADER_PACK", &active_shader);
+        }
+    } else {
+        unsafe {
+            std::env::remove_var("HORIZON_SHADER_PACK");
         }
     }
 
@@ -439,13 +497,29 @@ pub(super) struct Launcher {'''
             + "            events.exit();\n"
             + "            return;\n"
             + "        }\n"
+            + "        purge_damaged_wardrobe_index(&self.home);\n"
+            + "        self.error = None;\n"
             + "        if self.game.is_none() && self.worker.is_none() {\n"
             + "            if !GAME_LAUNCHED_ONCE.swap(true, std::sync::atomic::Ordering::SeqCst) {\n"
             + "                let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"78|Loading Minecraft 26.3 Resources & Custom Skin...\");\n"
+            + "                let saved_appearance = std::fs::read(self.home.join(\"horizon-appearance.json\")).ok();\n"
             + "                apply_horizonz_custom_skin(&self.home);\n"
-            + "                if let Err(error) = self.action(events) {\n"
+            + "                let mut launch_res = self.action(events);\n"
+            + "                if launch_res.is_err() {\n"
+            + "                    let _ = std::fs::remove_file(self.home.join(\"wardrobe/wardrobe.json\"));\n"
+            + "                    self.error = None;\n"
+            + "                    launch_res = self.action(events);\n"
+            + "                }\n"
+            + "                if let Some(app_bytes) = saved_appearance {\n"
+            + "                    let _ = std::fs::write(self.home.join(\"horizon-appearance.json\"), &app_bytes);\n"
+            + "                    let eng_app = self.home.join(\".local/horizon-client\").join(horizon_core::VANILLA_VERSION).join(\"horizon-appearance.json\");\n"
+            + "                    let _ = std::fs::write(eng_app, &app_bytes);\n"
+            + "                }\n"
+            + "                if let Err(error) = launch_res {\n"
+            + "                    let _ = std::fs::write(self.home.join(\"android-error.txt\"), &error);\n"
             + "                    self.fail(error);\n"
             + "                } else if self.game.is_some() {\n"
+            + "                    self.error = None;\n"
             + "                    BOOT_READY_SIGNALED.store(true, std::sync::atomic::Ordering::SeqCst);\n"
             + "                    let _ = std::fs::write(self.home.join(\"zalith-game-boot.txt\"), \"100|Main Menu Ready\");\n"
             + "                } else {\n"
@@ -777,7 +851,7 @@ def patch_ingame_ai_agent_and_native_mods():
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.1"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.2"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":
@@ -786,6 +860,92 @@ def patch_ingame_ai_agent_and_native_mods():
         except Exception as exc:
             print(f"[HorizonZ Patch] Notice fetching {fname}: {exc}")
 
+    # (b) Self-heal wardrobe.rs if "The wardrobe index is damaged." exists in crates/horizon-client/src/android/
+    wardrobe_rs = Path("crates/horizon-client/src/android/wardrobe.rs")
+    if wardrobe_rs.is_file():
+        wtxt = wardrobe_rs.read_text(encoding="utf-8")
+        if "The wardrobe index is damaged." in wtxt:
+            wtxt = wtxt.replace(
+                'Err("The wardrobe index is damaged.".to_string())',
+                '{ let _ = std::fs::remove_file(&path); Ok(Default::default()) }'
+            )
+            wardrobe_rs.write_text(wtxt, encoding="utf-8")
+            print("[HorizonZ Patch] Patched wardrobe.rs to auto-recover from damaged wardrobe.json!")
+
+    # (c) Package official upstream `crates/horizon-shader-api/packs/golden_hour` into `packaging/android/assets/builtin-shaders/golden_hour.hshader`
+    import zipfile as _zipfile
+    golden_hour_src = Path("crates/horizon-shader-api/packs/golden_hour")
+    if golden_hour_src.is_dir():
+        builtin_shaders_dir = Path("packaging/android/assets/builtin-shaders")
+        builtin_shaders_dir.mkdir(parents=True, exist_ok=True)
+        gh_out = builtin_shaders_dir / "golden_hour.hshader"
+        with _zipfile.ZipFile(gh_out, "w", _zipfile.ZIP_DEFLATED) as zf:
+            for sf in sorted(golden_hour_src.rglob("*")):
+                if sf.is_file():
+                    zf.write(sf, sf.relative_to(golden_hour_src).as_posix())
+        print(f"[HorizonZ Patch] Bundled official upstream golden_hour.hshader ({gh_out.stat().st_size} bytes) into APK assets!")
+
+    # (d) Apply official Horizon native mods (`zoom`, `fps-overlay`, `keystrokes`, `minimap`, `coords-hud`, `recipes`)
+    #     individually via `horizon-mixins` with per-mod backup & rollback so every compatible native mod compiles into horizon-client!
+    try:
+        mods_repo = Path("/tmp/horizon-official-mods")
+        mixins_repo = Path("/tmp/horizon-mixins-tool")
+        shutil.rmtree(mods_repo, ignore_errors=True)
+        shutil.rmtree(mixins_repo, ignore_errors=True)
+        r1 = subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/horizon-rust/horizon-mods.git", str(mods_repo)],
+            capture_output=True, text=True, timeout=60
+        )
+        r2 = subprocess.run(
+            ["git", "clone", "--depth", "1", "https://github.com/horizon-rust/horizon-mixins.git", str(mixins_repo)],
+            capture_output=True, text=True, timeout=60
+        )
+        if r1.returncode == 0 and r2.returncode == 0 and (mods_repo / "native").is_dir():
+            build_mx = subprocess.run(
+                ["cargo", "build", "--release", "--manifest-path", str(mixins_repo / "Cargo.toml")],
+                capture_output=True, text=True, timeout=180
+            )
+            mx_bin = mixins_repo / "target/release/horizon-mixins"
+            if build_mx.returncode == 0 and mx_bin.is_file():
+                applied_dirs = []
+                for mod_dir_name in ["zoom", "fps-overlay", "fps_overlay", "keystrokes", "minimap", "coords-hud", "coords_hud", "recipes"]:
+                    cand = mods_repo / "native" / mod_dir_name
+                    if not (cand / "horizon-mixin.toml").is_file():
+                        continue
+                    test_list = applied_dirs + [str(cand)]
+                    stage_out = Path("/tmp/horizon-mixins-stage")
+                    shutil.rmtree(stage_out, ignore_errors=True)
+                    ap = subprocess.run(
+                        [str(mx_bin), "apply", "--game", ".", "--out", str(stage_out)] + test_list,
+                        capture_output=True, text=True, timeout=60
+                    )
+                    if ap.returncode == 0 and (stage_out / "crates/horizon-client").is_dir():
+                        applied_dirs = test_list
+                if applied_dirs:
+                    backup_dir = Path("/tmp/horizon-client-pre-mixins-backup")
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+                    shutil.copytree(Path("crates/horizon-client"), backup_dir)
+                    stage_out = Path("/tmp/horizon-mixins-stage")
+                    shutil.rmtree(stage_out, ignore_errors=True)
+                    ap = subprocess.run(
+                        [str(mx_bin), "apply", "--game", ".", "--out", str(stage_out)] + applied_dirs,
+                        capture_output=True, text=True, timeout=60
+                    )
+                    if ap.returncode == 0 and (stage_out / "crates/horizon-client").is_dir():
+                        shutil.rmtree(Path("crates/horizon-client"))
+                        shutil.copytree(stage_out / "crates/horizon-client", Path("crates/horizon-client"))
+                        chk = subprocess.run(
+                            ["cargo", "check", "-p", "horizon-android"],
+                            capture_output=True, text=True, timeout=240
+                        )
+                        if chk.returncode == 0:
+                            print(f"[HorizonZ Patch] Successfully compiled {len(applied_dirs)} official native mods into horizon-client!")
+                        else:
+                            shutil.rmtree(Path("crates/horizon-client"))
+                            shutil.copytree(backup_dir, Path("crates/horizon-client"))
+                    shutil.rmtree(backup_dir, ignore_errors=True)
+    except Exception as exc:
+        print(f"[HorizonZ Patch] Notice during optional native-mods mixin stage: {exc}")
 
 patch_ingame_ai_agent_and_native_mods()
 

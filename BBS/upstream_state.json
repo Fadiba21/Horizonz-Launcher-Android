@@ -2,9 +2,9 @@
   "upstream_repo": "https://github.com/Vasysik/horizon-android",
   "upstream_branch": "android",
   "request_id": "HZ-UPSTREAM-c2665c8-150a414",
-  "qa_request_id": "HZ-REPAIR-v3.0-FileBoolean-v3.1",
-  "horizonz_version": "3.1",
-  "launcher_version": "3.1",
+  "qa_request_id": "HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2",
+  "horizonz_version": "3.2",
+  "launcher_version": "3.2",
   "upstream_base_commit": "c2665c830fbfe4dc5cf5dea2d541b0895684f604",
   "upstream_target_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
   "upstream_pinned_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
@@ -22,8 +22,8 @@
     "crates/horizon-android/src/lib.rs": "f8b36bf80c810911ddeb70075e9f8e7969469599cc15a35bde046d13d4901733",
     "packaging/android/bedrock-controls.json": "c7302b2d98bf2e989c367ba8da6807c6981099e0c73b83ad42ad54fb9d2926a3"
   },
-  "repair_request_id": "HZ-REPAIR-v3.0-FileBoolean-v3.1",
-  "version_name": "3.1.0-HorizonZ",
-  "version_code": 72,
-  "last_sync_summary": "HorizonZ v3.1 (3.1.0-HorizonZ, versionCode 72, HZ-REPAIR-v3.0-FileBoolean-v3.1): Fixed the File? vs Boolean condition at ZalithMainActivity.kt:6391:25 from applied v3.0 commit dbe3f0d94da4b6fd0d250e31a6ad2860374c6606 (CI run 42220531930) by capturing val importedFile: File? from HorizonNativeBridge.importUriToDestination(...) and evaluating val ok: Boolean = importedFile != null, audited all importUriToDestination call sites, retained all v3.0 in-game black screen and two-way Content Manager / Store / Engine synchronization fixes, and aligned v3.1 metadata across Gradle, workflow, README.md, runtime stamps, and BBS/*."
+  "repair_request_id": "HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2",
+  "version_name": "3.2.0-HorizonZ",
+  "version_code": 73,
+  "last_sync_summary": "HorizonZ v3.2 (3.2.0-HorizonZ, versionCode 73): Resolved the internal Horizon Android 0.7.7 screen and 'The wardrobe index is damaged.' error so launching goes 100% directly into Minecraft 26.3, replaced the dual-LaunchedEffect race condition in CleanFilesViewport with a single folder-isolated LaunchedEffect so switching categories (Shaders, Resource Packs, Saves, Modpacks, Screenshots) never displays Mods, fixed Mod Update version persistence in ensureValidHorizonModZip, connected Shaders to horizon-graphics.txt (pickedShaderPack:) with strict schema=1 horizon-shaders.toml validation and bundled upstream golden_hour.hshader, and eliminated duplicate launcher processes and unnecessary asset/thread overhead while playing."
 }

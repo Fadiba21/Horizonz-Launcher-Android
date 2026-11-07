@@ -384,16 +384,17 @@ class ZalithMainActivity : ComponentActivity() {
                                             HorizonNativeBridge.syncAllContentDirectoriesTwoWay(context, cfgSnapshot.profile)
                                             HorizonNativeBridge.prepareNativeGameLaunch(context, cfgSnapshot, accSnapshot)
                                         }
-                                        delay(140L)
+                                        delay(120L)
                                         isLauncherHibernated = true
                                         isGameProcessSleeping = true
                                         HorizonNativeBridge.startHorizonGameActivity(context, cfgSnapshot, accSnapshot)
-                                        // Keep the task root alive in 0% CPU/GPU sleep mode while :game (HorizonActivity)
-                                        // initializes its native Vulkan/GLES surface so Android WindowManager never aborts the transition.
-                                        delay(450L)
+                                        // Wait until :game (HorizonActivity) has established its foreground window and surface,
+                                        // then release launcher caches and finish ZalithMainActivity so no duplicate UI process runs!
+                                        delay(1800L)
                                         withContext(Dispatchers.IO) {
                                             HorizonNativeBridge.releaseMemoryForGameLaunch(context)
                                         }
+                                        runCatching { finish() }
                                     }
                                 }
                             }
@@ -446,6 +447,7 @@ fun Modifier.animatedPressScale(
     pressedScale: Float = 0.96f,
     onClick: () -> Unit
 ): Modifier = composed {
+    val currentOnClick by rememberUpdatedState(onClick)
     val interactionSource = remember { MutableInteractionSource() }
     val isPressed by interactionSource.collectIsPressedAsState()
     val scale by animateFloatAsState(
@@ -462,7 +464,7 @@ fun Modifier.animatedPressScale(
             interactionSource = interactionSource,
             indication = null,
             enabled = enabled,
-            onClick = onClick
+            onClick = { currentOnClick() }
         )
 }
 
@@ -6262,18 +6264,25 @@ private fun CleanFilesViewport(
         Triple("screenshots", "Screenshots", Icons.Default.Image)
     )
 
-    var rawList by remember { mutableStateOf<List<File>>(emptyList()) }
     var filteredList by remember { mutableStateOf<List<ManagerRowUiItem>>(emptyList()) }
 
-    LaunchedEffect(currentFolder, refreshCount, profileSlot) {
-        val loaded = withContext(Dispatchers.IO) {
+    LaunchedEffect(currentFolder, searchQuery, filterEnabledOnly, sortMode, refreshCount, profileSlot) {
+        val folderSnap = currentFolder
+        // Clear any stale items from another folder immediately so Mods never bleed into Shaders/ResourcePacks/Saves!
+        filteredList = filteredList.filter { it.folder == folderSnap }
+        val computed = withContext(Dispatchers.IO) {
             HorizonNativeBridge.syncAllContentDirectoriesTwoWay(context, profileSlot)
-            when (currentFolder) {
+            val loadedFiles: List<File> = when (folderSnap) {
                 "mods" -> {
                     HorizonNativeBridge.syncAndRepairModsStorage(context, profileSlot)
                     val hmodDir = File(home, "horizon-mods").apply { mkdirs() }
                     hmodDir.listFiles()
-                        ?.filter { it.isFile && !it.name.endsWith(".part") && !it.name.endsWith(".tmp") && it.name.endsWith(".hmod", true) }
+                        ?.filter { f ->
+                            f.isFile &&
+                                !f.name.endsWith(".part") &&
+                                !f.name.endsWith(".tmp") &&
+                                (f.name.endsWith(".hmod", true) || f.name.endsWith(".hnmod", true))
+                        }
                         ?.distinctBy { HorizonNativeBridge.sanitizeModId(it.name) }
                         .orEmpty()
                 }
@@ -6281,33 +6290,78 @@ private fun CleanFilesViewport(
                     HorizonNativeBridge.syncAndRepairShadersStorage(context, profileSlot)
                     val shaderDir = File(home, "shaderpacks").apply { mkdirs() }
                     shaderDir.listFiles()
-                        ?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }
+                        ?.filter { f ->
+                            !f.name.endsWith(".part") &&
+                                !f.name.endsWith(".tmp") &&
+                                !f.name.endsWith(".hmod", true) &&
+                                !f.name.endsWith(".hnmod", true) &&
+                                !f.name.endsWith(".hpack", true) &&
+                                (f.isDirectory || f.name.endsWith(".hshader", true) || f.name.endsWith(".zip", true))
+                        }
+                        .orEmpty()
+                }
+                "resourcepacks" -> {
+                    val rpDir = File(home, "resourcepacks").apply { mkdirs() }
+                    rpDir.listFiles()
+                        ?.filter { f ->
+                            !f.name.endsWith(".part") &&
+                                !f.name.endsWith(".tmp") &&
+                                !f.name.endsWith(".hmod", true) &&
+                                !f.name.endsWith(".hnmod", true) &&
+                                !f.name.endsWith(".hshader", true) &&
+                                !f.name.endsWith(".hpack", true) &&
+                                !f.name.equals("HorizonZ-CustomSkin.zip", ignoreCase = true) &&
+                                (f.isDirectory || f.name.endsWith(".zip", true))
+                        }
                         .orEmpty()
                 }
                 "modpacks" -> {
                     val packDir = File(home, "horizon-packs").apply { mkdirs() }
                     packDir.listFiles()
-                        ?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }
+                        ?.filter { f ->
+                            !f.name.endsWith(".part") &&
+                                !f.name.endsWith(".tmp") &&
+                                !f.name.endsWith(".hmod", true) &&
+                                (f.isFile && f.name.endsWith(".hpack", true) || f.isDirectory)
+                        }
+                        .orEmpty()
+                }
+                "saves" -> {
+                    val savesDir = File(home, "saves").apply { mkdirs() }
+                    savesDir.listFiles()
+                        ?.filter { f ->
+                            !f.name.endsWith(".part") &&
+                                !f.name.endsWith(".tmp") &&
+                                !f.name.endsWith(".hmod", true) &&
+                                (f.isDirectory || f.name.endsWith(".zip", true))
+                        }
+                        .orEmpty()
+                }
+                "screenshots" -> {
+                    val shotsDir = File(home, "screenshots").apply { mkdirs() }
+                    shotsDir.listFiles()
+                        ?.filter { f ->
+                            f.isFile &&
+                                !f.name.endsWith(".part") &&
+                                !f.name.endsWith(".tmp") &&
+                                (f.name.endsWith(".png", true) || f.name.endsWith(".jpg", true) || f.name.endsWith(".jpeg", true) || f.name.endsWith(".webp", true))
+                        }
                         .orEmpty()
                 }
                 else -> {
-                    val dirFile = File(home, currentFolder).apply { mkdirs() }
+                    val dirFile = File(home, folderSnap).apply { mkdirs() }
                     dirFile.listFiles()?.filter { !it.name.endsWith(".part") && !it.name.endsWith(".tmp") }.orEmpty()
                 }
             }
-        }
-        rawList = loaded
-    }
 
-    LaunchedEffect(rawList, searchQuery, filterEnabledOnly, currentFolder, sortMode, refreshCount) {
-        val computed = withContext(Dispatchers.IO) {
-            val isToggleableFolder = currentFolder in listOf("mods", "shaderpacks", "resourcepacks")
-            val prebuilt = rawList.mapNotNull { file ->
-                val modDetail = if (currentFolder == "mods") HorizonNativeBridge.inspectModPackage(file) else null
-                val saveDetail = if (currentFolder == "saves") HorizonNativeBridge.inspectWorldSave(file) else null
-                val packDetail = if (currentFolder in listOf("resourcepacks", "shaderpacks")) HorizonNativeBridge.inspectResourcePack(file) else null
+            val installedVersionsMap = HorizonNativeBridge.getInstalledStoreVersionsMap(context, profileSlot)
+            val isToggleableFolder = folderSnap in listOf("mods", "shaderpacks", "resourcepacks")
+            val prebuilt = loadedFiles.mapNotNull { file ->
+                val modDetail = if (folderSnap == "mods") HorizonNativeBridge.inspectModPackage(file) else null
+                val saveDetail = if (folderSnap == "saves") HorizonNativeBridge.inspectWorldSave(file) else null
+                val packDetail = if (folderSnap in listOf("resourcepacks", "shaderpacks")) HorizonNativeBridge.inspectResourcePack(file) else null
                 val enabled = if (isToggleableFolder) {
-                    HorizonNativeBridge.isContentItemEnabled(context, currentFolder, file.name, profileSlot)
+                    HorizonNativeBridge.isContentItemEnabled(context, folderSnap, file.name, profileSlot)
                 } else true
 
                 val displayTitle = when {
@@ -6339,22 +6393,36 @@ private fun CleanFilesViewport(
                         saveDetail != null -> "${saveDetail.difficulty} • ${saveDetail.playTimeFormatted} • Seed: ${saveDetail.worldSeed}"
                         else -> "File: ${file.name} (${file.length() / 1024} KB)"
                     }
-                    val catMatch = HorizonNativeBridge.findCatalogItemForLocalFile(file, currentFolder)
-                    val curVer = modDetail?.version ?: HorizonNativeBridge.getInstalledStoreVersionsMap(context, profileSlot)[HorizonNativeBridge.sanitizeModId(file.name)] ?: "1.0.0"
+                    val catMatch = HorizonNativeBridge.findCatalogItemForLocalFile(file, folderSnap)
+                    val cleanFileId = HorizonNativeBridge.sanitizeModId(file.name)
+                    val recordedVer = installedVersionsMap[cleanFileId]
+                        ?: modDetail?.let { installedVersionsMap[it.modId] }
+                        ?: catMatch?.let { installedVersionsMap[it.id] ?: installedVersionsMap[it.slug] }
+                    val rawManifestVer = modDetail?.version
+                    val curVer = when {
+                        !recordedVer.isNullOrBlank() && !rawManifestVer.isNullOrBlank() -> {
+                            val rT = HorizonNativeBridge.parseVersionNumbers(recordedVer)
+                            val mT = HorizonNativeBridge.parseVersionNumbers(rawManifestVer)
+                            if (rT != null && mT != null && HorizonNativeBridge.compareVersionLists(rT, mT) >= 0) recordedVer else rawManifestVer
+                        }
+                        !recordedVer.isNullOrBlank() -> recordedVer
+                        !rawManifestVer.isNullOrBlank() -> rawManifestVer
+                        else -> "1.0.0"
+                    }
                     val curTuple = HorizonNativeBridge.parseVersionNumbers(curVer)
                     val latestTuple = catMatch?.let { HorizonNativeBridge.parseVersionNumbers(it.version) }
                     val updateAvailable = catMatch != null && curTuple != null && latestTuple != null &&
                         HorizonNativeBridge.compareVersionLists(latestTuple, curTuple) > 0
                     ManagerRowUiItem(
-                        key = "${file.absolutePath}:${file.lastModified()}:$curVer",
+                        key = "$folderSnap:${file.absolutePath}:${file.lastModified()}:$curVer:$enabled",
                         file = file,
-                        folder = currentFolder,
+                        folder = folderSnap,
                         displayTitle = displayTitle,
                         subtitleText = subtitleText,
                         detailSummary = detailSummary,
                         isEnabled = enabled,
                         lastModified = file.lastModified(),
-                        modDetail = modDetail,
+                        modDetail = modDetail?.copy(version = curVer),
                         saveDetail = saveDetail,
                         packDetail = packDetail,
                         iconImage = iconBmp,
@@ -6369,7 +6437,9 @@ private fun CleanFilesViewport(
                 FilesSortMode.BY_LAST_MODIFIED -> prebuilt.sortedByDescending { it.lastModified }
             }
         }
-        filteredList = computed
+        if (currentFolder == folderSnap) {
+            filteredList = computed
+        }
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -6716,7 +6786,8 @@ private fun CleanFilesViewport(
                     label = "FilesFolderAnimatedTransition"
                 ) { folder ->
                     val folderLabel = categories.firstOrNull { it.first == folder }?.second ?: folder
-                    if (filteredList.isEmpty()) {
+                    val folderItems = remember(filteredList, folder) { filteredList.filter { it.folder == folder } }
+                    if (folderItems.isEmpty()) {
                         val emptyLabel = when (folder) {
                             "mods" -> "Belum ada mod terpasang untuk profil ini (Klik 'Store' untuk mengunduh dari playhorizon.dev/mods)"
                             "modpacks" -> "Belum ada Modpack (.hpack) terpasang untuk profil ini (Klik 'Store' untuk mengunduh Modpack)"
@@ -6751,7 +6822,7 @@ private fun CleanFilesViewport(
                             verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             items(
-                                items = filteredList,
+                                items = folderItems,
                                 key = { it.key },
                                 contentType = { it.folder }
                             ) { rowItem ->

@@ -189,7 +189,7 @@ enum class BuiltInSkinPreset(
 
 object HorizonNativeBridge {
     private const val TAG = "HorizonNativeBridge"
-    const val INSTALLED_LAUNCHER_VERSION = "3.1"
+    const val INSTALLED_LAUNCHER_VERSION = "3.2"
     private val lastGameLaunchTimestampMs = AtomicLong(0L)
     private const val MAX_LOG_LINES = 250
     private var nativeLoaded = false
@@ -609,8 +609,14 @@ object HorizonNativeBridge {
         Toast.makeText(context, "Copied to clipboard", Toast.LENGTH_SHORT).show()
     }
 
+    @Volatile
+    private var homeDirsInitialized: Boolean = false
+
     fun ensureHomeDirectories(context: Context): File {
         val home = context.filesDir
+        if (homeDirsInitialized && home.isDirectory) {
+            return home
+        }
         listOf(
             "saves",
             "resourcepacks",
@@ -643,6 +649,19 @@ object HorizonNativeBridge {
             File(home, sub).mkdirs()
         }
 
+        // Remove any legacy/foreign wardrobe/wardrobe.json that causes "The wardrobe index is damaged." in Vasysik/horizon-android
+        listOf(
+            File(home, "wardrobe/wardrobe.json"),
+            File(home, ".local/horizon-client/26.3/wardrobe/wardrobe.json")
+        ).forEach { wf ->
+            if (wf.isFile) {
+                val txt = runCatching { wf.readText() }.getOrDefault("")
+                if (txt.contains("\"selections\"") || txt.isBlank()) {
+                    wf.delete()
+                }
+            }
+        }
+
         // Self-heal stale 14-byte dummy asset-index.json markers that could cause a black screen on launch
         val root26Check = File(home, ".local/horizon-client/26.3")
         val assetIdxCheck = File(root26Check, "asset-index.json")
@@ -655,18 +674,18 @@ object HorizonNativeBridge {
         }
 
         val engineZip = File(home, "engine-data.zip")
-        try {
-            context.assets.open("engine-data.zip").use { input ->
-                val assetBytes = input.readBytes()
-                if (!engineZip.exists() || engineZip.length() != assetBytes.size.toLong()) {
+        if (!engineZip.exists() || engineZip.length() < 1024L) {
+            try {
+                context.assets.open("engine-data.zip").use { input ->
                     FileOutputStream(engineZip).use { output ->
-                        output.write(assetBytes)
+                        input.copyTo(output)
                     }
                     appendSystemLog("Synced bundled engine-data.zip (${engineZip.length() / 1024} KB).", true, context)
                 }
+            } catch (ignored: Exception) {
             }
-        } catch (ignored: Exception) {
         }
+        homeDirsInitialized = true
         return home
     }
 
@@ -1770,6 +1789,7 @@ object HorizonNativeBridge {
         val syncedStateFiles = listOf(
             "options.txt",
             "options_horizon.txt",
+            "horizon-graphics.txt",
             "horizon-mods.txt",
             "hmods.txt",
             "hmod_list.json",
@@ -2038,13 +2058,23 @@ object HorizonNativeBridge {
                 File(dir, "horizon-appearance.json").writeText(appearanceObj.toString(2))
             }
 
-            val wardrobeJsonFile = File(wardrobeDir, "wardrobe.json")
-            val rootObj = if (wardrobeJsonFile.isFile) {
-                runCatching { JSONObject(wardrobeJsonFile.readText()) }.getOrDefault(JSONObject())
+            // Remove any custom wardrobe/wardrobe.json containing "selections" so Vasysik/horizon-android's
+            // internal wardrobe.rs never fails with "The wardrobe index is damaged." during direct game launch!
+            listOf(home, profileHome, gameRoot26).distinctBy { it.absolutePath }.forEach { dir ->
+                val legacyWf = File(dir, "wardrobe/wardrobe.json")
+                if (legacyWf.isFile) {
+                    val txt = runCatching { legacyWf.readText() }.getOrDefault("")
+                    if (txt.contains("\"selections\"") || txt.isBlank()) {
+                        legacyWf.delete()
+                    }
+                }
+            }
+            val zalithWardrobeFile = File(wardrobeDir, "zalith-wardrobe-selections.json")
+            val rootObj = if (zalithWardrobeFile.isFile) {
+                runCatching { JSONObject(zalithWardrobeFile.readText()) }.getOrDefault(JSONObject())
             } else {
                 JSONObject()
             }
-            // Refuse unsupported schemas without replacing the stored index (`docs/android-appearance.md`)
             val existingSchema = rootObj.optInt("schema", 1)
             if (existingSchema == 1) {
                 rootObj.put("schema", 1)
@@ -2060,7 +2090,7 @@ object HorizonNativeBridge {
                     }
                 )
                 rootObj.put("selections", selections)
-                wardrobeJsonFile.writeText(rootObj.toString(2))
+                zalithWardrobeFile.writeText(rootObj.toString(2))
             }
         } catch (e: Exception) {
             Log.w(TAG, "syncWardrobeAndAppearanceContract note: ${e.message}")
@@ -2387,6 +2417,26 @@ object HorizonNativeBridge {
             "shaderpacks" -> {
                 val stem = fileName.removeSuffix(".hshader").removeSuffix(".zip")
                 val cleanStem = sanitizeModId(stem)
+                // Check Horizon 26.3 authoritative `horizon-graphics.txt` (`pickedShaderPack:<fileName>`) first!
+                val graphicsTxt = allRuntimeDirs
+                    .map { File(it, "horizon-graphics.txt") }
+                    .filter { it.isFile && it.length() > 0L }
+                    .maxByOrNull { it.lastModified() }
+                if (graphicsTxt != null) {
+                    val gLines = runCatching { graphicsTxt.readLines() }.getOrDefault(emptyList())
+                    val pickedLine = gLines.firstOrNull {
+                        it.trim().startsWith("pickedShaderPack:") || it.trim().startsWith("pickedShaderPack=")
+                    }
+                    if (pickedLine != null) {
+                        val pickedVal = pickedLine.substringAfter("pickedShaderPack").trimStart(':', '=').trim().trim('"')
+                        if (pickedVal.isEmpty() || pickedVal.equals("none", ignoreCase = true) || pickedVal.equals("off", ignoreCase = true)) {
+                            return false
+                        }
+                        return pickedVal.equals(fileName, ignoreCase = true) ||
+                            pickedVal.equals(stem, ignoreCase = true) ||
+                            sanitizeModId(pickedVal) == cleanStem
+                    }
+                }
                 val shadersTxt = allRuntimeDirs
                     .map { File(it, "horizon-shaders.txt") }
                     .filter { it.isFile && it.length() > 0L }
@@ -2540,9 +2590,23 @@ object HorizonNativeBridge {
                     if (shaderFile.exists()) {
                         ensureValidHorizonShaderZip(shaderFile, fileName)
                     }
+                    val targetVal = if (enabled) fileName else ""
+                    // Write Horizon 26.3 authoritative `pickedShaderPack` into `horizon-graphics.txt`!
+                    val graphicsFile = File(dir, "horizon-graphics.txt")
+                    val gLines = if (graphicsFile.exists()) graphicsFile.readLines().toMutableList() else mutableListOf()
+                    var foundPicked = false
+                    val outG = gLines.map { line ->
+                        val t = line.trim()
+                        if (t.startsWith("pickedShaderPack:") || t.startsWith("pickedShaderPack=")) {
+                            foundPicked = true
+                            "pickedShaderPack:$targetVal"
+                        } else line
+                    }.toMutableList()
+                    if (!foundPicked) outG.add("pickedShaderPack:$targetVal")
+                    graphicsFile.writeText(outG.joinToString("\n") + "\n")
+
                     val optFile = File(dir, "options.txt")
                     val lines = if (optFile.exists()) optFile.readLines().toMutableList() else mutableListOf()
-                    val targetVal = if (enabled) fileName else ""
                     var found = false
                     val out = lines.map { line ->
                         if (line.startsWith("shaderPack:")) {
@@ -3248,17 +3312,23 @@ object HorizonNativeBridge {
                 manifestText.contains("capabilities = [\"registries\"]") &&
                 cleanId in setOf("fps_overlay", "keystrokes", "coords_hud", "minimap", "zoom", "recipes", "mod_menu", "mousetricks", "waypoints")
             val existingVer = Regex("(?m)^\\s*version\\s*=\\s*\"([^\"]+)\"").find(manifestText)?.groupValues?.get(1).orEmpty()
+            val existingApi = Regex("(?m)^\\s*api\\s*=\\s*\"([^\"]+)\"").find(manifestText)?.groupValues?.get(1).orEmpty()
             val versionMatches = !forceUpdateVersion || fallbackVersion.isBlank() || existingVer == finalVersion
+            val apiMatches263 = existingApi == "0.2" || existingApi == "0.3"
 
             if (hasTopLevelId && !hasSectionHeader && hasCapabilities && !wasStrippedByOldRepair) {
-                if (hasWasmBinary || versionMatches) {
-                    // Preserve genuine `.hmod` packages with `mod.wasm` 100% byte-for-byte untouched!
+                if (versionMatches && apiMatches263) {
                     hasValidManifest = true
                 } else {
-                    preservedManifestText = manifestText.replace(
-                        Regex("(?m)^(\\s*version\\s*=\\s*)\"[^\"]*\""),
-                        "$1\"$finalVersion\""
-                    )
+                    preservedManifestText = manifestText
+                        .replace(
+                            Regex("(?m)^(\\s*version\\s*=\\s*)\"[^\"]*\""),
+                            "$1\"$finalVersion\""
+                        )
+                        .replace(
+                            Regex("(?m)^(\\s*api\\s*=\\s*)\"0\\.1\""),
+                            "$1\"0.2\""
+                        )
                 }
             }
         }
@@ -3267,8 +3337,8 @@ object HorizonNativeBridge {
             return
         }
 
-        // Build or repair the `.hmod` ZIP archive with a compliant root `horizon-mod.toml`!
-        val apiVer = if (hasWasmBinary) "0.1" else "0.2"
+        // Build or repair the `.hmod` ZIP archive with a compliant root `horizon-mod.toml` (`api = "0.2"`)!
+        val apiVer = "0.2"
         val sideVal = if (hasWasmBinary) "client" else "both"
         val validManifestToml = preservedManifestText ?: (listOf(
             "id = \"$cleanId\"",
@@ -3298,6 +3368,7 @@ object HorizonNativeBridge {
             }
             if (targetFile.exists()) targetFile.delete()
             tmpZip.renameTo(targetFile)
+            modDetailCache.clear()
         } catch (e: Exception) {
             tmpZip.delete()
             Log.w(TAG, "Failed to repair .hmod archive ${targetFile.name}: ${e.message}")
@@ -3361,11 +3432,16 @@ object HorizonNativeBridge {
             }
         }
 
-        // Check if root `horizon-shaders.toml` exists and is valid schema = 1 without `@fragment` WGSL
+        // Check if root `horizon-shaders.toml` exists and is valid schema = 1 without unknown keys or `@fragment` WGSL
         val rootShadersToml = existingEntries["horizon-shaders.toml"]?.toString(Charsets.UTF_8)
+        val hasUnknownTopLevelKeys = rootShadersToml != null && (
+            Regex("(?m)^\\s*description\\s*=").containsMatchIn(rootShadersToml) ||
+                Regex("(?m)^\\s*authors\\s*=").containsMatchIn(rootShadersToml)
+            )
         val hasValidRootManifest = rootShadersToml != null &&
             Regex("(?m)^\\s*schema\\s*=\\s*1\\b").containsMatchIn(rootShadersToml) &&
-            !Regex("(?m)^\\s*\\[shader\\]").containsMatchIn(rootShadersToml)
+            !Regex("(?m)^\\s*\\[shader\\]").containsMatchIn(rootShadersToml) &&
+            !hasUnknownTopLevelKeys
         val hasInvalidFragmentAttr = existingEntries.entries.any { (k, v) ->
             if (!k.endsWith(".wgsl", true)) false
             else {
@@ -3378,15 +3454,14 @@ object HorizonNativeBridge {
             return
         }
 
-        // Build compliant `horizon-shaders.toml` + `sky.wgsl` + `post.wgsl` per `docs/shaders.md` & `docs/api/shaders.md`!
+        // Build compliant `horizon-shaders.toml` + `sky.wgsl` + `post.wgsl` per `docs/shaders.md` & `docs/api/shaders.md`
+        // (strictly known keys only: schema, id, name, version, api, [sky], [[post]])!
         val shadersManifest = listOf(
             "schema = 1",
             "id = \"$cleanId\"",
             "name = \"$finalTitle\"",
             "version = \"$finalVersion\"",
             "api = \"0.1\"",
-            "description = \"$finalSummary\"",
-            "authors = [\"Horizon Shaders\"]",
             "",
             "[sky]",
             "file = \"sky.wgsl\"",
@@ -3494,6 +3569,25 @@ object HorizonNativeBridge {
     fun getActiveShaderPackFileName(context: Context, profileSlot: Int = 0): String {
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
+        val allRuntimeDirs: List<File> = getAllRuntimeDirs(home, profileHome)
+        val graphicsFile = allRuntimeDirs
+            .map { File(it, "horizon-graphics.txt") }
+            .filter { it.isFile && it.length() > 0L }
+            .maxByOrNull { it.lastModified() }
+        if (graphicsFile != null) {
+            val picked = runCatching {
+                graphicsFile.readLines()
+                    .firstOrNull { it.trim().startsWith("pickedShaderPack:") || it.trim().startsWith("pickedShaderPack=") }
+                    ?.substringAfter("pickedShaderPack")
+                    ?.trimStart(':', '=')
+                    ?.trim()
+                    ?.trim('"')
+                    .orEmpty()
+            }.getOrDefault("")
+            if (picked.isNotEmpty() && !picked.equals("none", ignoreCase = true) && !picked.equals("off", ignoreCase = true)) {
+                return picked
+            }
+        }
         val optFile = File(profileHome, "options.txt").takeIf { it.exists() } ?: File(home, "options.txt")
         if (!optFile.exists()) return ""
         return runCatching {
@@ -3675,11 +3769,12 @@ object HorizonNativeBridge {
                     }
                 }
 
-                // Ensure `canonicalFile` is a 100% valid `.hmod` ZIP with `horizon-mod.toml`
+                // Ensure `canonicalFile` is a 100% valid `.hmod` ZIP with `horizon-mod.toml` and updated Store version
                 ensureValidHorizonModZip(
                     targetFile = canonicalFile,
                     fallbackId = modId,
-                    fallbackVersion = detectedVer
+                    fallbackVersion = detectedVer,
+                    forceUpdateVersion = detectedVer.isNotBlank()
                 )
             }
 
@@ -3960,7 +4055,6 @@ object HorizonNativeBridge {
      * AND cross-checks actual files and `.hmod` manifests in the active profile's directories!
      */
     fun getInstalledStoreVersionsMap(context: Context, profileSlot: Int): Map<String, String> {
-        syncAndRepairModsStorage(context, profileSlot)
         val home = ensureHomeDirectories(context)
         val profileHome = getProfileHome(home, profileSlot)
         val result = mutableMapOf<String, String>()
@@ -5012,13 +5106,29 @@ object HorizonNativeBridge {
     private fun writeBuiltInHorizonArtifact(context: Context, targetFile: File, item: StoreCatalogItem) {
         when (item.category) {
             StoreCategory.SHADER_PACK -> {
-                ensureValidHorizonShaderZip(
-                    targetFile = targetFile,
-                    fallbackId = item.id,
-                    fallbackTitle = item.title,
-                    fallbackVersion = item.version,
-                    fallbackSummary = item.summary
-                )
+                val cleanShaderId = sanitizeModId(item.id).removeSuffix("_shader").ifBlank { "golden_hour" }
+                var copiedBundledShader = false
+                for (candName in listOf("$cleanShaderId.hshader", "golden_hour.hshader")) {
+                    try {
+                        context.assets.open("builtin-shaders/$candName").use { inp ->
+                            FileOutputStream(targetFile).use { outp -> inp.copyTo(outp) }
+                        }
+                        if (targetFile.length() > 64L) {
+                            copiedBundledShader = true
+                            break
+                        }
+                    } catch (ignored: Exception) {
+                    }
+                }
+                if (!copiedBundledShader) {
+                    ensureValidHorizonShaderZip(
+                        targetFile = targetFile,
+                        fallbackId = item.id,
+                        fallbackTitle = item.title,
+                        fallbackVersion = item.version,
+                        fallbackSummary = item.summary
+                    )
+                }
             }
             StoreCategory.RESOURCE_PACK -> {
                 ensureValidResourcePackZip(
