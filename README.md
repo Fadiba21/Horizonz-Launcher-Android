@@ -9,7 +9,7 @@
 **Native Rust Minecraft 26.3 Launcher & Engine for Android (`arm64-v8a` & `armeabi-v7a`)**
 
 <!-- VERSION_BADGE_START -->
-[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v3.2-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases)
+[![Release](https://img.shields.io/badge/HorizonZ_Launcher-v3.3-8BE0FF?style=for-the-badge&logo=android&logoColor=0E2430)](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases)
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.3_Rust-81C784?style=for-the-badge&logo=rust&logoColor=0E2430)](https://github.com/horizon-rust/horizon)
 [![Upstream](https://img.shields.io/badge/Vasysik_Horizon-android_150a414-D0C6F2?style=for-the-badge)](https://github.com/Vasysik/horizon-android)
 [![Gemini AI](https://img.shields.io/badge/Google_AI_Studio-Gemini_4_Argon_%7C_3.8_%7C_3.5-FFB74D?style=for-the-badge&logo=googlegemini&logoColor=261600)](https://aistudio.google.com/)
@@ -18,7 +18,7 @@
 </div>
 
 <!-- LATEST_VERSION_START -->
-> 🚀 **Latest Update — HorizonZ v3.2 (`HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2`, `3.2.0-HorizonZ`, `versionCode 73`)**: Fixes **direct boot into Minecraft 26.3** so launching never stops on the internal `Horizon Android 0.7.7` screen or fails with `"The wardrobe index is damaged."`, eliminates the **Manager (`CleanFilesViewport`) category-switching race condition** so selecting **Shader Packs**, **Resource Packs**, **Saves**, **Modpacks**, or **Screenshots** never displays **Mods**, fixes **Mod Update version persistence** in `ensureValidHorizonModZip` and `CleanFilesViewport`, connects **Shader Packs (`.hshader`)** to Horizon 26.3's `horizon-graphics.txt` (`pickedShaderPack:`) with strict `schema = 1` `horizon-shaders.toml` validation and bundled upstream `golden_hour.hshader`, compiles compatible official native mods via `horizon-mixins`, and eliminates duplicate launcher processes and redundant asset/thread overhead during gameplay.
+> **HorizonZ v3.3 source update (`HZ-REPAIR-v3.2-Rust-v3.3`; `3.3.0-HorizonZ`; `versionCode 74`)**: Corrects the two Rust-generation errors reported by v3.2: malformed quoting for the `"selections"` key in generated `launcher.rs`, and writing `Box<dyn StdError>` directly as bytes. The generator now uses a raw Python template for the first fix and writes the error's string bytes for the second; v3.3 metadata is aligned. **Scope note:** this ZIP removes the `wardrobe.rs` self-heal generator block from both the main and BBS scripts, so that v3.2 behavior is not retained; the separate `wardrobe.json` cleanup/retry remains. Runtime behavior has not been tested here.
 <!-- LATEST_VERSION_END -->
 
 ## ✨ Key Features
@@ -64,9 +64,15 @@
 
 ## 📥 Source & Release Summary
 
-### 📦 HorizonZ v3.2 Summary (`versionCode 73` • `3.2.0-HorizonZ`)
-- **Configured CI Target ABIs**: [HorizonZ-Launcher-3.2-arm64-v8a.apk](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) (64-bit ARMv8) and [HorizonZ-Launcher-3.2-armeabi-v7a.apk](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) (32-bit ARMv7) when built via `.github/workflows/build-apk.yml`.
-- **What's New in v3.2 (`HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2`)**:
+### 📦 HorizonZ v3.3 Summary (`versionCode 74` • `3.3.0-HorizonZ`)
+- **Configured CI Target ABIs**: [HorizonZ-Launcher-3.3-arm64-v8a.apk](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) (64-bit ARMv8) and [HorizonZ-Launcher-3.3-armeabi-v7a.apk](https://github.com/Fadiba21/Horizonz-Launcher-Android/releases) (32-bit ARMv7) when built via `.github/workflows/build-apk.yml`.
+- **What's New in v3.3 (`HZ-REPAIR-v3.2-Rust-v3.3`)**:
+  - **Rust string-literal fix:** Made `new_struct` a raw Python string in `scripts/patch_horizon_direct_boot.py` and its BBS mirror, addressing the malformed quote output that caused `invalid suffix` and `E0061` for the `"selections"` key.
+  - **Rust error logging fix:** Convert `Box<dyn StdError>` to text and write `error_text.as_bytes()` before passing the original error to `self.fail(error)`, addressing the v3.2 `E0277` at `std::fs::write`.
+  - **Aligned v3.3 metadata:** Align `3.3.0-HorizonZ` / `versionCode 74`, `INSTALLED_LAUNCHER_VERSION = "3.3"`, the `3.3-0.7.7-150a414` runtime stamp, `HorizonZ-CI/3.3` user agent, and matching workflow/BBS version metadata.
+  - **Wardrobe self-heal scope change:** This ZIP removes the generator block that patches `crates/horizon-client/src/android/wardrobe.rs` from both `scripts/patch_horizon_direct_boot.py` and its BBS mirror. The separate `wardrobe.json` cleanup/retry remains; the v3.2 `wardrobe.rs` self-heal behavior is not retained in v3.3.
+  - **Verification note:** No Android runtime/device test was performed; these notes describe source changes, not a runtime claim.
+- **What's New in v3.2 (`HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2`, commit `b26a6185cb413b23f4b6070694333e8403279aa5`)**:
   - **Direct Boot into Minecraft 26.3 & `"The wardrobe index is damaged."` Resolution (`HorizonNativeBridge.kt`, `HorizonActivity.java`, `scripts/patch_horizon_direct_boot.py`)**:
     - Separated HorizonZ's per-account skin/cape tracking into `wardrobe/zalith-wardrobe-selections.json` and removed custom `"selections"` writes from `wardrobe/wardrobe.json` (which caused `Vasysik/horizon-android`'s internal `wardrobe.rs` to return `Err("The wardrobe index is damaged.")` and abort `Launcher::action` before starting `self.game`).
     - Updated `Launcher::draw_pages` in `scripts/patch_horizon_direct_boot.py` to unconditionally return `Ok(())` when `HORIZON_SHOW_INTERNAL_UI` is unset so the internal `Horizon Android 0.7.7` egui screen is never shown, added automatic `wardrobe.json` cleanup + retry and `horizon-appearance.json` preservation around `self.action(events)`, and patched `wardrobe.rs` to self-heal damaged wardrobe index files.

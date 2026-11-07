@@ -2,9 +2,9 @@
   "upstream_repo": "https://github.com/Vasysik/horizon-android",
   "upstream_branch": "android",
   "request_id": "HZ-UPSTREAM-c2665c8-150a414",
-  "qa_request_id": "HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2",
-  "horizonz_version": "3.2",
-  "launcher_version": "3.2",
+  "qa_request_id": "HZ-REPAIR-v3.2-Rust-v3.3",
+  "horizonz_version": "3.3",
+  "launcher_version": "3.3",
   "upstream_base_commit": "c2665c830fbfe4dc5cf5dea2d541b0895684f604",
   "upstream_target_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
   "upstream_pinned_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
@@ -22,8 +22,8 @@
     "crates/horizon-android/src/lib.rs": "f8b36bf80c810911ddeb70075e9f8e7969469599cc15a35bde046d13d4901733",
     "packaging/android/bedrock-controls.json": "c7302b2d98bf2e989c367ba8da6807c6981099e0c73b83ad42ad54fb9d2926a3"
   },
-  "repair_request_id": "HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2",
-  "version_name": "3.2.0-HorizonZ",
-  "version_code": 73,
-  "last_sync_summary": "HorizonZ v3.2 (3.2.0-HorizonZ, versionCode 73): Resolved the internal Horizon Android 0.7.7 screen and 'The wardrobe index is damaged.' error so launching goes 100% directly into Minecraft 26.3, replaced the dual-LaunchedEffect race condition in CleanFilesViewport with a single folder-isolated LaunchedEffect so switching categories (Shaders, Resource Packs, Saves, Modpacks, Screenshots) never displays Mods, fixed Mod Update version persistence in ensureValidHorizonModZip, connected Shaders to horizon-graphics.txt (pickedShaderPack:) with strict schema=1 horizon-shaders.toml validation and bundled upstream golden_hour.hshader, and eliminated duplicate launcher processes and unnecessary asset/thread overhead while playing."
+  "repair_request_id": "HZ-REPAIR-v3.2-Rust-v3.3",
+  "version_name": "3.3.0-HorizonZ",
+  "version_code": 74,
+  "last_sync_summary": "HorizonZ v3.3 (3.3.0-HorizonZ, versionCode 74, HZ-REPAIR-v3.2-Rust-v3.3): Repaired the two Rust compiler errors in crates/horizon-client/src/android/launcher.rs from applied v3.2 commit b26a6185cb413b23f4b6070694333e8403279aa5 (CI Run #30, ID 42324171415, jobs 128255581694 and 128255581731) in scripts/patch_horizon_direct_boot.py and its BBS/runtime-rust/patched_active/ mirror by using raw string r'''...''' for new_struct so txt.contains(\"\\\"selections\\\"\") is emitted as valid Rust at line 104, and converting Box<dyn StdError> via error.to_string().as_bytes() for std::fs::write at line 792 (E0277) before self.fail(error)."
 }

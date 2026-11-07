@@ -136,9 +136,9 @@ def sync_upstream_into_bbs(upstream_dir: Path | None = None):
         "upstream_repo": "https://github.com/Vasysik/horizon-android",
         "upstream_branch": "android",
         "request_id": "HZ-UPSTREAM-c2665c8-150a414",
-        "qa_request_id": "HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2",
-        "horizonz_version": "3.2",
-        "launcher_version": "3.2.0-HorizonZ",
+        "qa_request_id": "HZ-REPAIR-v3.2-Rust-v3.3",
+        "horizonz_version": "3.3",
+        "launcher_version": "3.3.0-HorizonZ",
         "upstream_base_commit": "c2665c830fbfe4dc5cf5dea2d541b0895684f604",
         "upstream_target_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
         "upstream_pinned_commit": "150a414b09a18c900489d9462a7fc035dae744b7",
@@ -151,7 +151,7 @@ def sync_upstream_into_bbs(upstream_dir: Path | None = None):
             "Historical cached snapshot hashes for the 3 files in BBS/runtime-rust/upstream_clean/ (captured at 125c67284343d649b92ac5b3f9eb5a50f56328ca, not refreshed offline); refreshed automatically at CI build time when BBS/sync_and_merge_bbs.py runs against the pinned 150a414b09a18c900489d9462a7fc035dae744b7 checkout.",
         ),
         "upstream_hashes": new_hashes,
-        "repair_request_id": "HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2",
+        "repair_request_id": "HZ-REPAIR-v3.2-Rust-v3.3",
     }
     STATE_FILE.write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
     print("[BBS Auto-Sync] BBS runtime folder synchronized and custom edits verified.")

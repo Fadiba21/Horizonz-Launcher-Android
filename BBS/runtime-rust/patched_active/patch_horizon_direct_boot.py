@@ -68,7 +68,7 @@ def ensure_upstream_include_assets():
             fetched = False
             for url in urls:
                 try:
-                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.2"})
+                    req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.3"})
                     with urllib.request.urlopen(req, timeout=20) as resp:
                         data = resp.read()
                     if data:
@@ -134,7 +134,7 @@ if launcher_rs.exists():
     txt = launcher_rs.read_text(encoding="utf-8")
 
     old_struct = "pub(super) struct Launcher {"
-    new_struct = '''static GAME_LAUNCHED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    new_struct = r'''static GAME_LAUNCHED_ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn sanitize_and_repair_horizon_mods(home: &std::path::Path) {
     let mods_dir = home.join("horizon-mods");
@@ -516,7 +516,8 @@ pub(super) struct Launcher {'''
             + "                    let _ = std::fs::write(eng_app, &app_bytes);\n"
             + "                }\n"
             + "                if let Err(error) = launch_res {\n"
-            + "                    let _ = std::fs::write(self.home.join(\"android-error.txt\"), &error);\n"
+            + "                    let error_text = error.to_string();\n"
+            + "                    let _ = std::fs::write(self.home.join(\"android-error.txt\"), error_text.as_bytes());\n"
             + "                    self.fail(error);\n"
             + "                } else if self.game.is_some() {\n"
             + "                    self.error = None;\n"
@@ -851,7 +852,7 @@ def patch_ingame_ai_agent_and_native_mods():
     }
     for fname, url in official_hmod_urls.items():
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.2"})
+            req = urllib.request.Request(url, headers={"User-Agent": "HorizonZ-CI/3.3"})
             with urllib.request.urlopen(req, timeout=20) as resp:
                 data = resp.read()
             if len(data) > 100 and data[:4] == b"PK\x03\x04":
@@ -859,18 +860,6 @@ def patch_ingame_ai_agent_and_native_mods():
                 print(f"[HorizonZ Patch] Bundled genuine executable {fname} ({len(data)} bytes) into APK assets!")
         except Exception as exc:
             print(f"[HorizonZ Patch] Notice fetching {fname}: {exc}")
-
-    # (b) Self-heal wardrobe.rs if "The wardrobe index is damaged." exists in crates/horizon-client/src/android/
-    wardrobe_rs = Path("crates/horizon-client/src/android/wardrobe.rs")
-    if wardrobe_rs.is_file():
-        wtxt = wardrobe_rs.read_text(encoding="utf-8")
-        if "The wardrobe index is damaged." in wtxt:
-            wtxt = wtxt.replace(
-                'Err("The wardrobe index is damaged.".to_string())',
-                '{ let _ = std::fs::remove_file(&path); Ok(Default::default()) }'
-            )
-            wardrobe_rs.write_text(wtxt, encoding="utf-8")
-            print("[HorizonZ Patch] Patched wardrobe.rs to auto-recover from damaged wardrobe.json!")
 
     # (c) Package official upstream `crates/horizon-shader-api/packs/golden_hour` into `packaging/android/assets/builtin-shaders/golden_hour.hshader`
     import zipfile as _zipfile

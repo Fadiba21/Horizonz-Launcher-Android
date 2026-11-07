@@ -48,7 +48,7 @@ jobs:
           exit 0
 
   build-horizonz-apk:
-    name: Build HorizonZ 3.2 APK (${{ matrix.abi }})
+    name: Build HorizonZ 3.3 APK (${{ matrix.abi }})
     needs: apply-update-zip
     if: always() && !cancelled()
     runs-on: ubuntu-latest
@@ -124,7 +124,7 @@ jobs:
         with:
           targets: ${{ matrix.rust_target }}
 
-      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 3.2 Patches
+      - name: Checkout Pinned Vasysik/horizon-android (150a414) & Apply HorizonZ 3.3 Patches
         run: |
           rm -rf /tmp/horizon-upstream
           UPSTREAM_TARGET_COMMIT="150a414b09a18c900489d9462a7fc035dae744b7"
@@ -161,7 +161,7 @@ jobs:
       - name: Cache Rust Engine Build
         uses: Swatinem/rust-cache@v2
         with:
-          key: horizon-real-engine-v32-150a414-${{ matrix.rust_target }}
+          key: horizon-real-engine-v33-150a414-${{ matrix.rust_target }}
 
       - name: Compile Real Horizon Rust Engine (libhorizon_android.so) & Prestage Controls (${{ matrix.abi }})
         run: |
@@ -186,7 +186,7 @@ jobs:
           TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           export PATH="$TOOLCHAIN_BIN:$PATH"
           export HORIZON_ANDROID_PUBLIC=1
-          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz32')"
+          export HORIZON_ANDROID_BUILD_COMMIT="$(git rev-parse --short=12 HEAD 2>/dev/null || echo 'horizonz33')"
           export HORIZON_ANDROID_BUILD_DIRTY="false"
           export CARGO_PROFILE_RELEASE_LTO=false
           export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
@@ -236,18 +236,18 @@ jobs:
           fi
           mkdir -p ../../dist
           APK_FOUND="$(find build/outputs/apk/release ../../.local/android/gradle-build/outputs/apk/release -name "*.apk" 2>/dev/null | head -n 1)"
-          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-3.2-${{ matrix.abi }}.apk"
+          cp -f "$APK_FOUND" "../../dist/HorizonZ-Launcher-3.3-${{ matrix.abi }}.apk"
           ls -lh ../../dist/
 
       - name: Upload APK Artifact (${{ matrix.abi }})
         uses: actions/upload-artifact@v4
         with:
-          name: HorizonZ-Launcher-3.2-${{ matrix.abi }}
-          path: dist/HorizonZ-Launcher-3.2-${{ matrix.abi }}.apk
+          name: HorizonZ-Launcher-3.3-${{ matrix.abi }}
+          path: dist/HorizonZ-Launcher-3.3-${{ matrix.abi }}.apk
           if-no-files-found: error
 
   publish-release:
-    name: Publish HorizonZ 3.2 Release APKs
+    name: Publish HorizonZ 3.3 Release APKs
     needs: build-horizonz-apk
     runs-on: ubuntu-latest
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -267,21 +267,18 @@ jobs:
       - name: Create or Update Latest GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: horizonz-v3.2.0-build-${{ github.run_number }}
-          name: "HorizonZ - Launcher v3.2 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
+          tag_name: horizonz-v3.3.0-build-${{ github.run_number }}
+          name: "HorizonZ - Launcher v3.3 (Build #${{ github.run_number }} • Android Fork Release • ARM64 & ARM32)"
           body: |
-            - **What's New in v3.2 (`HZ-DIRECT-BOOT-MANAGER-SHADERS-MODS-v3.2`)**:
-              - **Direct Boot into Minecraft 26.3 & `"The wardrobe index is damaged."` Resolution (`HorizonNativeBridge.kt`, `HorizonActivity.java`, `scripts/patch_horizon_direct_boot.py`)**:
-                - Separated HorizonZ's per-account skin/cape tracking into `wardrobe/zalith-wardrobe-selections.json` and removed custom `"selections"` writes from `wardrobe/wardrobe.json` (which caused `Vasysik/horizon-android`'s internal `wardrobe.rs` to return `Err("The wardrobe index is damaged.")` and abort `Launcher::action` before starting `self.game`).
-                - Updated `Launcher::draw_pages` in `scripts/patch_horizon_direct_boot.py` to unconditionally return `Ok(())` when `HORIZON_SHOW_INTERNAL_UI` is unset so the internal `Horizon Android 0.7.7` egui screen is never shown, added automatic `wardrobe.json` cleanup + retry and `horizon-appearance.json` preservation around `self.action(events)`, and patched `wardrobe.rs` to self-heal damaged wardrobe index files.
-              - **Manager (`CleanFilesViewport`) Category Isolation & Mod Update Fix (`ZalithMainActivity.kt`, `HorizonNativeBridge.kt`)**:
-                - Replaced the two racing `LaunchedEffect` blocks in `CleanFilesViewport` (`rawList` and `filteredList`) with a single atomic `LaunchedEffect(currentFolder, searchQuery, filterEnabledOnly, sortMode, refreshCount, profileSlot)` that immediately filters `filteredList` by `it.folder == currentFolder`, strictly filters files by extension per category, and calls `getInstalledStoreVersionsMap` once outside the item loop so switching to **Shader Packs**, **Resource Packs**, **Saves**, **Modpacks**, or **Screenshots** never displays **Mods**.
-                - Fixed `ensureValidHorizonModZip` so `forceUpdateVersion = true` always updates `version = "$finalVersion"` inside `horizon-mod.toml` (even when `mod.wasm` is present) and updates `api = "0.2"`, and resolved the higher of `modDetail.version` and `installedVersionsMap` in `CleanFilesViewport` so updating a mod immediately updates its version badge and clears the `↑ Update` indicator.
-              - **In-Game Shader Packs (`horizon-graphics.txt`) & Mods Activation (`HorizonNativeBridge.kt`, `scripts/patch_horizon_direct_boot.py`)**:
-                - Connected shader activation in `isContentItemEnabled`, `setContentItemEnabled`, `getActiveShaderPackFileName`, and `apply_horizonz_shader_and_agent_config` to Horizon 26.3's authoritative `horizon-graphics.txt` (`pickedShaderPack:<fileName>`) as well as `HORIZON_SHADER_PACK`, removed unknown `description`/`authors` keys from `ensureValidHorizonShaderZip` (`horizon-shaders.toml` `schema = 1`), and bundled upstream `crates/horizon-shader-api/packs/golden_hour` into `packaging/android/assets/builtin-shaders/golden_hour.hshader`.
-                - Restored per-mod `horizon-mixins` compilation with individual rollback guards in `scripts/patch_horizon_direct_boot.py` so compatible official native mods (`zoom`, `fps-overlay`, `keystrokes`, `minimap`, `coords-hud`, `recipes`) compile directly into `libhorizon_android.so`.
-              - **Eliminated Duplicate Processes & Background Overhead (`ZalithMainActivity.kt`, `HorizonNativeBridge.kt`, `HorizonActivity.java`)**:
-                - Calls `finish()` on `ZalithMainActivity` 1.8s after `HorizonActivity` (`:game`) establishes its surface so no duplicate launcher UI process remains in RAM during gameplay, caches `homeDirsInitialized` in `ensureHomeDirectories` so `engine-data.zip` is never re-read into memory on bridge calls, throttles `HorizonSplashOverlayView` disk polling to `180ms`, and skips starting `HorizonZ-GeminiAgentBridge` when no API key is configured.
+            ## HorizonZ - Launcher v3.3 (3.3.0-HorizonZ; versionCode 74)
+            
+            - **What's New in v3.3 (`HZ-REPAIR-v3.2-Rust-v3.3`)**:
+              - **Rust string-literal fix:** Made `new_struct` a raw Python string in `scripts/patch_horizon_direct_boot.py` and its BBS mirror, addressing the malformed quote output that caused `invalid suffix` and `E0061` for the `"selections"` key.
+              - **Rust error logging fix:** Convert `Box<dyn StdError>` to text and write `error_text.as_bytes()` before passing the original error to `self.fail(error)`, addressing the v3.2 `E0277` at `std::fs::write`.
+              - **Aligned v3.3 metadata:** Align `3.3.0-HorizonZ` / `versionCode 74`, `INSTALLED_LAUNCHER_VERSION = "3.3"`, the `3.3-0.7.7-150a414` runtime stamp, `HorizonZ-CI/3.3` user agent, and matching workflow/BBS version metadata.
+              - **Wardrobe self-heal scope change:** This ZIP removes the generator block that patches `crates/horizon-client/src/android/wardrobe.rs` from both `scripts/patch_horizon_direct_boot.py` and its BBS mirror. The separate `wardrobe.json` cleanup/retry remains; the v3.2 `wardrobe.rs` self-heal behavior is not retained in v3.3.
+              - **Verification note:** No Android runtime/device test was performed; these notes describe source changes, not a runtime claim.
+
           files: |
             release-apks/*.apk
             release-apks/SHA256SUMS.txt
