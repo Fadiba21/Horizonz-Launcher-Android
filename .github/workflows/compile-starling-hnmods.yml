@@ -1,0 +1,142 @@
+name: Compile Starling APK with 10 Native Mods (.hnmod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      starling_repo:
+        description: "Starling repository to build (JuanLuci/starling or starling-client/starling)"
+        required: false
+        default: "JuanLuci/starling"
+      starling_ref:
+        description: "Branch or tag (android for JuanLuci/starling, starling for starling-client/starling)"
+        required: false
+        default: "android"
+  push:
+    branches:
+      - starling-hnmod-compiler
+    paths:
+      - "hnmods/**"
+      - "scripts/compile_hnmods_for_starling.py"
+      - ".github/workflows/compile-starling-hnmods.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  compile-starling-with-hnmods:
+    name: Build Starling arm64-v8a + 10 .hnmod Native Mods
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout Mod Bundle Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 & Pillow
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Python build helpers
+        run: |
+          python3 -m pip install --upgrade pip pillow tomli
+
+      - name: Set up JDK (Temurin 21 + JDK 25 fallback for Starling packaging)
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Configure Pre-Installed Android SDK (Platform 35/36, Build-Tools 35.0.0 & NDK r28c 28.2.13676358)
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDKMANAGER" ]; then
+            SDKMANAGER="$(find "$ANDROID_HOME" -name sdkmanager -type f 2>/dev/null | head -n 1)"
+          fi
+          yes | "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --licenses > /dev/null || true
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-36" || \
+            "$SDKMANAGER" --sdk_root="$ANDROID_HOME" --channel=3 "platforms;android-36" || true
+
+          NDK_VERSION="28.2.13676358"
+          NDK_DIR="$ANDROID_HOME/ndk/$NDK_VERSION"
+          for attempt in 1 2 3; do
+            if [ -f "$NDK_DIR/source.properties" ]; then
+              break
+            fi
+            if "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "ndk;$NDK_VERSION" && [ -f "$NDK_DIR/source.properties" ]; then
+              break
+            fi
+            rm -rf "$NDK_DIR" "$ANDROID_HOME/temp"
+            sleep "$((attempt * 5))"
+          done
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+
+      - name: Set up Rust Toolchain (Nightly + 1.90+ aarch64-linux-android) & cargo-ndk
+        run: |
+          rustup toolchain install nightly --profile minimal --target aarch64-linux-android
+          rustup toolchain install stable --profile minimal --target aarch64-linux-android
+          rustup default nightly
+          rustup target add aarch64-linux-android
+          cargo install cargo-ndk --locked || true
+
+      - name: Clone Starling & Horizon-Mixins
+        run: |
+          REPO="${{ github.event.inputs.starling_repo || 'JuanLuci/starling' }}"
+          REF="${{ github.event.inputs.starling_ref || 'android' }}"
+          rm -rf /tmp/starling_src /tmp/horizon_mixins
+          git clone --depth 50 --branch "$REF" "https://github.com/${REPO}.git" /tmp/starling_src || \
+            git clone --depth 50 "https://github.com/${REPO}.git" /tmp/starling_src
+          git clone --depth 30 "https://github.com/horizon-rust/horizon-mixins.git" /tmp/horizon_mixins
+
+      - name: Adapt & Apply 10 .hnmod Native Mods onto Starling Source
+        run: |
+          mkdir -p "$PWD/dist"
+          python3 scripts/compile_hnmods_for_starling.py \
+            "$PWD/hnmods" \
+            "/tmp/starling_src" \
+            "/tmp/horizon_mixins" \
+            "$PWD/dist"
+
+      - name: Build Modded Starling APK & libhorizon_android.so (via build_apk.py / android_build.py / cargo-ndk)
+        working-directory: /tmp/starling_src
+        run: |
+          TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export PATH="$TOOLCHAIN_BIN:$PATH"
+
+          if [ -f "packaging/lowbudget/make.py" ]; then
+            python3 packaging/lowbudget/make.py || true
+          fi
+
+          if [ -f "packaging/android/build_apk.py" ]; then
+            echo "[*] Running JuanLuci/starling packaging/android/build_apk.py..."
+            python3 packaging/android/build_apk.py --profile fast || python3 packaging/android/build_apk.py
+          elif [ -f "tools/android_build.py" ]; then
+            echo "[*] Running tools/android_build.py --abi arm64-v8a --public..."
+            python3 tools/android_build.py --abi arm64-v8a --public --ndk "$ANDROID_NDK_HOME" || \
+            python3 tools/android_build.py --abi arm64-v8a --rust-only --ndk "$ANDROID_NDK_HOME"
+          else
+            echo "[*] Building libhorizon_android.so via cargo-ndk..."
+            cargo ndk -t arm64-v8a -o "$GITHUB_WORKSPACE/dist/jniLibs" build --release -p horizon-android || \
+            cargo ndk -t arm64-v8a -o "$GITHUB_WORKSPACE/dist/jniLibs" build --release
+          fi
+
+          find /tmp/starling_src \( -name "*.apk" -o -name "libhorizon_android.so" -o -name "build.json" \) | while read -r f; do
+            cp -vf "$f" "$GITHUB_WORKSPACE/dist/" || true
+          done
+          ls -lh "$GITHUB_WORKSPACE/dist/"
+
+      - name: Upload Compiled Modded Starling APK & Adapted .hnmod Bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: starling-10-hnmods-compiled-bundle
+          path: |
+            dist/**
+            hnmods/**
+          if-no-files-found: warn
